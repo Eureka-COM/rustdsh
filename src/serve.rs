@@ -112,7 +112,6 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
             "application/json",
             crate::inspect::names_json("profiles"),
         ),
-        ("GET", "/api/updates") => (200, "application/json", updates_json()),
         _ => (
             404,
             "application/json",
@@ -148,18 +147,6 @@ fn doctor_json() -> String {
         "version": env!("CARGO_PKG_VERSION"),
     })
     .to_string()
-}
-
-fn updates_json() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let path = format!("{home}/.local/share/rdsh/update-state.json");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(v) => v.to_string(),
-            Err(_) => serde_json::json!({"updated": false}).to_string(),
-        },
-        Err(_) => serde_json::json!({"updated": false}).to_string(),
-    }
 }
 
 fn bench_json(query: &str) -> String {
