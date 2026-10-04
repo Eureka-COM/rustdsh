@@ -196,11 +196,21 @@ pub fn respond(
 pub struct ConnectionSlot(Arc<AtomicUsize>);
 impl ConnectionSlot {
     pub fn acquire(count: &Arc<AtomicUsize>) -> Option<Self> {
-        count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_CONNECTIONS).then_some(n + 1)
-            })
-            .ok()?;
+        let mut current = count.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_CONNECTIONS {
+                return None;
+            }
+            match count.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(latest) => current = latest,
+            }
+        }
         Some(Self(count.clone()))
     }
 }
