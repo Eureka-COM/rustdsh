@@ -14,4 +14,5 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build
-      - run: BIN=./target/debug/rdsh sh tests/regress.sh
+      - run: printf "#!/bin/sh\necho stub-dsh $@" > /tmp/stub-dsh && chmod +x /tmp/stub-dsh
+      - run: BIN=./target/debug/rdsh DSH_ORIG_BIN=/tmp/stub-dsh sh tests/regress.sh
