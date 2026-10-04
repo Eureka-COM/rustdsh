@@ -41,6 +41,10 @@ footer { padding: 0 24px 24px; color: var(--mut); font-size: 12px; }
 <textarea id="ptext" placeholder="長いツール出力を貼り付け"></textarea>
 <div class="row"><label>予算</label><input id="pmax" type="number" value="4000" min="100"></div>
 <button onclick="prune()">prune実行</button><pre id="pout">-</pre></section>
+<section class="card"><h2>セッション</h2><p>最新のセッション一覧（Nodeなし）</p>
+<button class="ghost" onclick="sessions()">更新</button><pre id="sess">未取得</pre></section>
+<section class="card"><h2>スキル</h2><p>導入済みスキル一覧</p>
+<button class="ghost" onclick="skills()">更新</button><pre id="sk">未取得</pre></section>
 <section class="card"><h2>ベンチ</h2><p>rdsh vs dsh の起動速度を比較</p>
 <button class="ghost" onclick="bench()">計測 (n=3)</button><pre id="bench">未計測</pre></section>
 </main>
@@ -53,7 +57,9 @@ async function doctor(){ const d = await jget("/api/doctor"); document.getElemen
 async function tokens(){ const t = document.getElementById("ttext").value; const r = await jpost("/api/tokens", {text: t}); document.getElementById("tout").textContent = "tokens: " + r.tokens + " / chars: " + r.chars; }
 async function prune(){ const t = document.getElementById("ptext").value; const m = +document.getElementById("pmax").value || 4000; const r = await jpost("/api/prune", {text: t, max_tokens: m}); document.getElementById("pout").textContent = "[before " + r.before + " -> after " + r.after + "]\n" + r.pruned.slice(0, 2000); }
 async function bench(){ document.getElementById("bench").textContent = "計測中…"; const r = await jget("/api/bench?n=3"); document.getElementById("bench").textContent = JSON.stringify(r, null, 2); }
-doctor();
+async function sessions(){ const r = await jget("/api/sessions?limit=10"); document.getElementById("sess").textContent = r.sessions.map(s => s.mtime + " " + s.project + "/" + s.id).join("\n") + "\n(" + r.projects + " projects)"; }
+async function skills(){ const r = await jget("/api/skills"); document.getElementById("sk").textContent = r.names.join("\n"); }
+doctor(); sessions(); skills();
 </script>
 </body>
 </html>

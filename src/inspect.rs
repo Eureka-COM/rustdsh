@@ -231,3 +231,58 @@ fn latest_file(dir: &str) -> Option<std::path::PathBuf> {
     }
     best.map(|(_, p)| p)
 }
+
+fn mtime_of(v: &serde_json::Value) -> &str {
+    v.get("mtime").and_then(|m| m.as_str()).unwrap_or("")
+}
+
+fn dir_names(dir: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|e| {
+            e.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+pub fn names_json(kind: &str) -> String {
+    let dir = format!("{}/{}", dsh_home(), kind);
+    serde_json::json!({"kind": kind, "names": dir_names(&dir)}).to_string()
+}
+
+pub fn sessions_json(limit: usize) -> String {
+    let root = format!("{}/sessions", dsh_home());
+    let mut out: Vec<serde_json::Value> = vec![];
+    let projs: Vec<String> = std::fs::read_dir(&root)
+        .map(|e| {
+            e.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    for proj in &projs {
+        let pdir = std::path::Path::new(&root).join(proj);
+        if let Ok(entries) = std::fs::read_dir(&pdir) {
+            for e in entries.filter_map(|e| e.ok()) {
+                if !e.path().is_dir() {
+                    continue;
+                }
+                let (bytes, _m, mtime_s) = dir_size_mtime(&e.path());
+                out.push(serde_json::json!({
+                    "project": proj,
+                    "id": e.file_name().to_string_lossy(),
+                    "bytes": bytes,
+                    "mtime": mtime_s,
+                }));
+            }
+        }
+    }
+    out.sort_by(|a, b| mtime_of(b).cmp(mtime_of(a)));
+    out.truncate(limit.clamp(1, 100));
+    serde_json::json!({"sessions": out, "projects": projs.len()}).to_string()
+}

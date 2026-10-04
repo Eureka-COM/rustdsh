@@ -11,8 +11,8 @@ rdsh serve
 # ※ dsh web GUIと同ポートのため競合時は `rdsh serve --port 38080` 等を使う
 ```
 
-- 状態確認（doctor）、トークン推定、prune、起動ベンチをブラウザから実行
-- API: `GET /api/version` `GET /api/doctor` `POST /api/tokens` `POST /api/prune` `GET /api/bench?n=3`
+- 状態確認（doctor）、トークン推定、prune、起動ベンチ、セッション・スキル一覧をブラウザから実行
+- API: `GET /api/version` `GET /api/doctor` `POST /api/tokens` `POST /api/prune` `GET /api/bench?n=3` `GET /api/sessions?limit=20` `GET /api/skills` `GET /api/profiles`
 - 依存なし（std のみ + 埋め込み単一HTML、CDN 不要・オフライン可）
 
 ## なぜ速い・軽い・トークン節約になるか
@@ -59,7 +59,28 @@ rdsh logs --tail 50 --grep ERROR    # 起動ログ参照（Nodeなし）
 rdsh profiles / rdsh skills         # 一覧（Nodeなし）
 rdsh doctor
 rdsh bench --n 5
+
+echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*secret*"  # hooks.json用ガード（一致でexit 2）
 ```
+
+### hooks.json での使い方（`rdsh guard`）
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "rdsh guard --deny \"rm -rf /*\" --deny \"*token*\"" }]
+      }
+    ]
+  }
+}
+```
+
+- 標準入力（フックJSONまたは生テキスト）を走査し、拒否パターン（`*`は任意文字列）に一致したらexit 2＋理由出力でブロック、それ以外はexit 0で通過
+- `--json` を付けると `{"decision":"block"/"approve"}` を標準出力に返す
+- 起動約1ms・RSS約3MBのため、ツール呼び出しごとのフックコストはほぼゼロ
 
 ## 安全設計（破壊しない理由）
 
@@ -87,4 +108,5 @@ cargo build --release  # target/release/rdsh
 - `src/compact.rs` — JSONL セッション圧縮
 - `src/serve.rs` + `src/ui.html` — ローカル Web UI（std のみ HTTP）
 - `src/inspect.rs` — sessions/logs/skills/profiles の読取専用参照（Nodeなし）
+- `src/guard.rs` — hooks.json用高速ガード（exit 2でブロック）
 - `install.sh` — インストーラ（`--as-dsh` 置換 / `--restore` 復元）

@@ -66,6 +66,22 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
             (200, "application/json", serde_json::json!({"pruned": pruned, "before": before, "after": after, "budget": max}).to_string())
         }
         ("GET", "/api/bench") => (200, "application/json", bench_json(query)),
+        ("GET", "/api/sessions") => {
+            let n: usize = query
+                .split("&")
+                .find_map(|kv| {
+                    let mut it = kv.splitn(2, "=");
+                    match (it.next(), it.next()) {
+                        (Some("limit"), Some(v)) => v.parse().ok(),
+                        _ => None,
+                    }
+                })
+                .unwrap_or(20)
+                .clamp(1, 100);
+            (200, "application/json", crate::inspect::sessions_json(n))
+        }
+        ("GET", "/api/skills") => (200, "application/json", crate::inspect::names_json("skills")),
+        ("GET", "/api/profiles") => (200, "application/json", crate::inspect::names_json("profiles")),
         _ => (404, "application/json", serde_json::json!({"error": "not found"}).to_string()),
     };
     let status_text = match status {

@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 mod compact;
 mod dsh_args;
+mod guard;
 mod passthrough;
 mod inspect;
 mod search;
@@ -103,6 +104,15 @@ enum Commands {
         #[arg(long = "n", default_value_t = 5)]
         n: u32,
     },
+    /// Hook helper for hooks.json: block stdin text matching --deny (exit 2)
+    Guard {
+        #[arg(long = "deny")]
+        deny: Vec<String>,
+        #[arg(long = "reason")]
+        reason: Option<String>,
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 /// First-arg subcommands owned by rdsh. When installed as `dsh`, anything else
@@ -110,7 +120,7 @@ enum Commands {
 /// `dsh --version`, `dsh --help` stay byte-identical).
 /// NOTE: a profile literally named like these (bare `dsh tokens`) is shadowed;
 /// boot it with `dsh --profile tokens` instead.
-const NATIVE_FIRST: &[&str] = &["boot", "dump-config", "tokens", "prune", "search", "compact", "doctor", "bench", "serve", "sessions", "profiles", "skills", "logs"];
+const NATIVE_FIRST: &[&str] = &["boot", "dump-config", "tokens", "prune", "search", "compact", "doctor", "bench", "serve", "sessions", "profiles", "skills", "logs", "guard"];
 
 fn invoked_as_dsh() -> bool {
     let argv0 = std::env::args().next().unwrap_or_default();
@@ -155,6 +165,7 @@ fn main() {
         Some(Commands::Logs { tail, grep, file }) => inspect::cmd_logs(tail, grep, file),
         Some(Commands::Serve { port }) => serve::cmd_serve(port),
         Some(Commands::Bench { n }) => bench(n),
+        Some(Commands::Guard { deny, reason, json }) => guard::cmd_guard(deny, reason, json),
         Some(Commands::DumpConfig { profile, native }) => {
             let p = profile.or(cli.profile).unwrap_or_else(|| "tui".to_string());
             if native {
@@ -205,7 +216,7 @@ fn print_help() {
     println!();
     println!("USAGE:");
     println!("  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]");
-    println!("  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|sessions|profiles|skills|logs|dump-config|boot)");
+    println!("  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|dump-config|boot)");
     println!();
     println!("EXAMPLES:");
     println!("  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)");
