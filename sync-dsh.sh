@@ -18,6 +18,12 @@ LOGDIR="${HOME}/.local/share/rdsh"
 LOCK="/tmp/rdsh-sync.lock"
 mkdir -p "$LOGDIR"
 log() { printf "%s %s\n" "$(date -u +%FT%TZ)" "$*" | tee -a "$LOGDIR/sync.log"; }
+notify() {
+  log "notify: $1 -- $2"
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send "rdsh sync: $1" "$2" 2>/dev/null || true
+  fi
+}
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$LOCK" || exit 1
   flock -n 9 || { log "another sync is running; exit"; exit 0; }
@@ -57,15 +63,19 @@ fi
 if [ "$DSH_CHANGED" = 1 ] && [ "$CHECK_ONLY" = 0 ]; then
 log "updating $INSTALLED -> $LATEST"
 if ! "$NPM" install -g "@deepseek-ai/dsh@$LATEST" >> "$LOGDIR/sync.log" 2>&1; then
-  log "npm install failed; kept $INSTALLED"; exit 1
+  log "npm install failed; kept $INSTALLED"
+  notify "dsh update failed" "npm install of $LATEST failed; kept $INSTALLED"
+  exit 1
 fi
 GOT="$(node -p "require(process.argv[1]).version" "$PKGROOT/package.json" 2>/dev/null)"
 ORIG_BIN="$(command -v dsh-orig 2>/dev/null || printf "%s" "$HOME/.local/bin/dsh-orig")"
 if [ "$GOT" = "$LATEST" ] && [ -x "$ORIG_BIN" ] && "$ORIG_BIN" --version >/dev/null 2>&1; then
   log "updated OK: $GOT (orig binary answers)"
   write_state "dsh" "$INSTALLED" "$GOT"
+  notify "dsh updated" "$INSTALLED -> $GOT"
 else
   log "verify failed (got=$GOT); rolling back to $INSTALLED"
+  notify "dsh update failed" "verify failed for $LATEST; rolled back to $INSTALLED"
   "$NPM" install -g "@deepseek-ai/dsh@$INSTALLED" >> "$LOGDIR/sync.log" 2>&1 || true
   log "rollback done"
   exit 1
@@ -107,8 +117,10 @@ if [ -d "$REPO/.git" ] && command -v git >/dev/null 2>&1; then
       fi
       write_state "rdsh" "$LOCAL" "$REMOTE"
       log "rdsh updated OK: $REMOTE (regress passed, binaries refreshed)"
+      notify "rdsh updated" "rebuilt and refreshed from $REMOTE"
     else
       log "rdsh build/regress failed; binaries untouched"
+      notify "rdsh update failed" "build or regress failed; binaries untouched"
     fi
   fi
 else
