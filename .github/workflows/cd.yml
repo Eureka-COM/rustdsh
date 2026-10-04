@@ -44,11 +44,19 @@ jobs:
         run: Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin }}" -DestinationPath ${{ matrix.pkg }}
       # Ship the installers alongside the binaries so releases are one-liners:
       #   curl -fsSL .../releases/latest/download/install.sh | bash -s -- --from-release
-      - uses: softprops/action-gh-release@v2
+      # Installers go up from the Linux job only: same filenames from every
+      # matrix job race on delete+re-upload, and Windows checkouts use CRLF.
+      - if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ matrix.pkg }}
             install.sh
             install.ps1
+          generate_release_notes: true
+      - if: runner.os != 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.pkg }}
           generate_release_notes: true
 

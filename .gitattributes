@@ -1,0 +1,4 @@
+# Keep shell installers LF everywhere (WSL reads repo files directly).
+*.sh text eol=lf
+# PowerShell prefers CRLF on Windows.
+*.ps1 text eol=crlf
