@@ -134,6 +134,9 @@ honored) → `~/.config/rdsh/origin` →
   `RDSH_DRY_RUN=1 dsh ...` (print only)
 - Name shadowing: a bare `dsh tokens` runs the rdsh subcommand; a profile
   literally named `tokens` still boots via `dsh --profile tokens`
+- Node wrappers: scripts that run `node "$(... dsh ...)"` break while `dsh` is
+  shadowed (the path is now a native binary, not JS). Exec `dsh`/`rdsh`
+  directly instead of via `node`; `rdsh doctor` lists the offending wrappers.
 
 ## Using with Smart-DSH
 
@@ -191,9 +194,9 @@ dumps, missing `--profile`) are reproduced in Rust.
 
 ### Verification (all executed)
 
-- `cargo test`: 14 unit tests pass (token math, wildcard matcher, arg splitter).
+- `cargo test`: 15 unit tests pass (token math, wildcard matcher, arg splitter).
   The suite caught and fixed one real matcher bug (single-pattern substring).
-- `tests/regress.sh`: 19 CLI checks pass (every subcommand, error paths, and
+- `tests/regress.sh`: 20 CLI checks pass (every subcommand, error paths, and
   sandboxed `dsh`-name delegation against a fake original).
 - Optimization diffs: old vs. new binary outputs compared byte-for-byte
   (300-hit search and truncated-max search both identical).
@@ -223,15 +226,15 @@ dumps, missing `--profile`) are reproduced in Rust.
 - `src/guard.rs` — hooks.json guard command
 - `src/serve.rs` + `src/ui.html` — local web dashboard
 - `install.sh` — installer (`--as-dsh` shadow / `--restore`)
-- `tests/regress.sh` — CLI regression suite (19 checks)
+- `tests/regress.sh` — CLI regression suite (20 checks)
 
 ## Contributing
 
 ```sh
 cargo fmt --check      # must be clean
 cargo clippy --all-targets -- -D warnings   # must be clean
-cargo test             # 14 unit tests
-BIN=./target/debug/rdsh sh tests/regress.sh # 19 CLI checks (needs cargo build first)
+cargo test             # 15 unit tests
+BIN=./target/debug/rdsh sh tests/regress.sh # 20 CLI checks (needs cargo build first)
 ```
 
 No new dependencies without discussion: binary size and startup time are

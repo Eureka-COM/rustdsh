@@ -107,6 +107,7 @@ echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*token*"
 - 命名は本家に準拠：コマンド・フラグはケバブケース（`dump-config`等）、`DSH_`環境変数名前空間は本家の所有とし、rdsh固有キーは `RDSH_` 配下に置きます
 - 一時退避： `RDSH_PASSTHROUGH=1 dsh ...`（slim無し）、`RDSH_DRY_RUN=1 dsh ...`（実行内容のみ表示）
 - 注意： `dsh tokens` のようにプロファイル名が予約語と衝突する場合は `dsh --profile tokens` で起動してください
+- Nodeラッパー： `node "$(... dsh ...)"` 形式のスクリプトは置換中に壊れます（`dsh`はJSではなくネイティブバイナリのため）。`node`経由ではなく `dsh`/`rdsh` を直接実行してください。対象は `rdsh doctor` が一覧表示します
 
 ## Smart-DSH との併用
 
@@ -158,8 +159,8 @@ rdsh serve
 
 ### 検証（すべて実行済み）
 
-- `cargo test`：14件通過（トークン計算・ワイルドカード・引数分割）
-- `tests/regress.sh`：19件通過（全サブコマンド・異常系・dsh名委譲の隔離検証）
+- `cargo test`：15件通過（トークン計算・ワイルドカード・引数分割）
+- `tests/regress.sh`：20件通過（全サブコマンド・異常系・dsh名委譲の隔離検証）
 - 高速化の前後で出力をdiff比較し、完全一致を確認（300件search・上限打ち切りsearch）
 - 実置換後に `dsh --version`（委譲）と `dsh guard`（新機能）を実機確認
 
@@ -184,7 +185,7 @@ rdsh serve
 - `src/guard.rs` — hooks.json用ガード
 - `src/serve.rs`＋`src/ui.html` — ローカルWeb UI
 - `install.sh` — 導入（`--as-dsh`置換／`--restore`復元）
-- `tests/regress.sh` — CLI回帰試験（19件）
+- `tests/regress.sh` — CLI回帰試験（20件）
 
 ## よくある質問
 

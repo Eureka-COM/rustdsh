@@ -336,6 +336,9 @@ fn doctor() -> anyhow::Result<()> {
                 .to_string(),
         );
     }
+    for w in node_wrapper_warnings() {
+        say(w);
+    }
     say("[rdsh] note: dsh web GUI and `rdsh serve` both default to 3080; co-use with".to_string());
     say("[rdsh] note: `rdsh serve --port 38080` while dsh web keeps 3080".to_string());
     if orig.is_none() {
@@ -387,6 +390,51 @@ fn smart_dsh_status(home: &str) -> String {
     } else {
         format!("bundles in web profile: {}", found.join(", "))
     }
+}
+
+/// Wrappers that run `node` on the `dsh` path break once `dsh` is shadowed by
+/// the native binary (Node tries to parse the ELF as JS). Scan the local bin
+/// dir for text files mentioning both and point at the offending wrappers.
+fn node_wrapper_warnings() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return vec![];
+    }
+    let dir = format!("{home}/.local/bin");
+    let entries = std::fs::read_dir(&dir).ok();
+    let mut hits: Vec<String> = vec![];
+    if let Some(entries) = entries {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap_or_default();
+            if bytes.len() > 65536 || bytes.contains(&0) {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            if text.contains("node") && text.contains("dsh") {
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    hits.push(name.to_string());
+                }
+            }
+            if hits.len() >= 10 {
+                break;
+            }
+        }
+    }
+    hits.sort();
+    let shadowed = shadowing_original();
+    hits.into_iter()
+        .map(|name| {
+            if shadowed {
+                format!("[rdsh] warn: ~/.local/bin/{name} calls `node` on a dsh path; while `dsh` is shadowed that path is a native binary — exec `dsh`/`rdsh` directly instead of via `node`")
+            } else {
+                format!("[rdsh] note: ~/.local/bin/{name} calls `node` on a dsh path; it will break if `dsh` is later shadowed — exec `dsh`/`rdsh` directly instead of via `node`")
+            }
+        })
+        .collect()
 }
 
 /// True when `dsh` on PATH resolves to this binary (install.sh --as-dsh state).
