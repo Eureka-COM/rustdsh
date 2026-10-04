@@ -29,11 +29,16 @@ pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
 }
 
 fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
+    use std::borrow::Cow;
     use std::io::{Read, Write};
     s.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
-    let mut buf = vec![0u8; 65536];
+    // Stack buffer: no heap alloc/zero per connection. Single-read
+    // semantics preserved (same 64KB ceiling as before).
+    let mut buf = [0u8; 65536];
     let n = s.read(&mut buf)?;
-    let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+    // Borrow when valid UTF-8 (the common case) instead of copying.
+    let req_cow = String::from_utf8_lossy(&buf[..n]);
+    let req: &str = &req_cow;
     let mut lines = req.lines();
     let head = lines.next().unwrap_or("");
     let mut parts = head.split_whitespace();
@@ -43,51 +48,48 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
         Some(i) => (&target[..i], &target[i + 1..]),
         None => (target, ""),
     };
-    let body = match req.find("\r\n\r\n") {
-        Some(i) => req[i + 4..].to_string(),
-        None => String::new(),
+    // Borrow the body slice instead of cloning it.
+    let body: &str = match req.find("\r\n\r\n") {
+        Some(i) => &req[i + 4..],
+        None => "",
     };
-    let (status, ctype, payload): (u16, &str, String) = match (method, path) {
-        ("GET", "/") => (200, "text/html; charset=utf-8", UI.to_string()),
-        ("GET", "/icon.svg") => (200, "image/svg+xml", ICON.to_string()),
-        ("GET", "/api/version") => (
-            200,
-            "application/json",
-            serde_json::json!({"name": "rdsh", "version": env!("CARGO_PKG_VERSION")}).to_string(),
-        ),
-        ("GET", "/api/doctor") => (200, "application/json", doctor_json()),
+    // Static payloads are byte-identical to the old serde_json output
+    // (serde_json sorts object keys; single-key or pre-sorted here).
+    const VERSION_JSON: &str = concat!(
+        "{\"name\":\"rdsh\",\"version\":\"",
+        env!("CARGO_PKG_VERSION"),
+        "\"}"
+    );
+    const NOT_FOUND_JSON: &str = "{\"error\":\"not found\"}";
+    let (status, ctype, payload): (u16, &str, Cow<'_, str>) = match (method, path) {
+        ("GET", "/") => (200, "text/html; charset=utf-8", Cow::Borrowed(UI)),
+        ("GET", "/icon.svg") => (200, "image/svg+xml", Cow::Borrowed(ICON)),
+        ("GET", "/api/version") => (200, "application/json", Cow::Borrowed(VERSION_JSON)),
+        ("GET", "/api/doctor") => (200, "application/json", Cow::Owned(doctor_json())),
         ("POST", "/api/tokens") => {
-            let text = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| {
-                    v.get("text")
-                        .and_then(|t| t.as_str())
-                        .map(|t| t.to_string())
-                })
-                .unwrap_or_default();
-            let t = crate::tokens::estimate_tokens(&text);
+            // Borrow `text` from the parsed body instead of cloning it.
+            let v: serde_json::Value =
+                serde_json::from_str(body).unwrap_or(serde_json::Value::Null);
+            let text: &str = v.get("text").and_then(|t| t.as_str()).unwrap_or_default();
+            let t = crate::tokens::estimate_tokens(text);
             (
                 200,
                 "application/json",
-                serde_json::json!({"tokens": t, "chars": text.len()}).to_string(),
+                Cow::Owned(serde_json::json!({"tokens": t, "chars": text.len()}).to_string()),
             )
         }
         ("POST", "/api/prune") => {
             let v: serde_json::Value =
-                serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-            let text = v
-                .get("text")
-                .and_then(|t| t.as_str())
-                .unwrap_or("")
-                .to_string();
+                serde_json::from_str(body).unwrap_or(serde_json::Value::Null);
+            let text: &str = v.get("text").and_then(|t| t.as_str()).unwrap_or_default();
             let max = v.get("max_tokens").and_then(|m| m.as_u64()).unwrap_or(4000) as usize;
             let max = max.clamp(100, 200_000);
-            let before = crate::tokens::estimate_tokens(&text);
-            let pruned = crate::tokens::prune_to_budget(&text, max);
+            let before = crate::tokens::estimate_tokens(text);
+            let pruned = crate::tokens::prune_to_budget(text, max);
             let after = crate::tokens::estimate_tokens(&pruned);
-            (200, "application/json", serde_json::json!({"pruned": pruned, "before": before, "after": after, "budget": max}).to_string())
+            (200, "application/json", Cow::Owned(serde_json::json!({"pruned": pruned, "before": before, "after": after, "budget": max}).to_string()))
         }
-        ("GET", "/api/bench") => (200, "application/json", bench_json(query)),
+        ("GET", "/api/bench") => (200, "application/json", Cow::Owned(bench_json(query))),
         ("GET", "/api/sessions") => {
             let n: usize = query
                 .split("&")
@@ -100,23 +102,23 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
                 })
                 .unwrap_or(20)
                 .clamp(1, 100);
-            (200, "application/json", crate::inspect::sessions_json(n))
+            (
+                200,
+                "application/json",
+                Cow::Owned(crate::inspect::sessions_json(n)),
+            )
         }
         ("GET", "/api/skills") => (
             200,
             "application/json",
-            crate::inspect::names_json("skills"),
+            Cow::Owned(crate::inspect::names_json("skills")),
         ),
         ("GET", "/api/profiles") => (
             200,
             "application/json",
-            crate::inspect::names_json("profiles"),
+            Cow::Owned(crate::inspect::names_json("profiles")),
         ),
-        _ => (
-            404,
-            "application/json",
-            serde_json::json!({"error": "not found"}).to_string(),
-        ),
+        _ => (404, "application/json", Cow::Borrowed(NOT_FOUND_JSON)),
     };
     let status_text = match status {
         200 => "OK",

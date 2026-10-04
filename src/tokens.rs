@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 
 /// Heuristic token estimator: ~4 chars/token for mixed text.
 /// CJK chars count ~1 token each. O(n), std-only.
@@ -6,16 +6,25 @@ pub fn estimate_tokens(s: &str) -> usize {
     if s.is_ascii() {
         return s.len().div_ceil(4);
     }
+    estimate_bytes(s.as_bytes())
+}
+
+/// Byte-level twin of the char rule above: ASCII bytes accumulate in runs
+/// of 4 -> 1 token, each non-ASCII scalar (exactly one UTF-8 lead byte)
+/// counts 1 token, continuation bytes count nothing. Same result as
+/// iterating `chars()`, without UTF-8 decoding overhead.
+fn estimate_bytes(b: &[u8]) -> usize {
     let mut tokens = 0usize;
     let mut ascii_run = 0usize;
-    for ch in s.chars() {
-        if ch.is_ascii() {
+    for &c in b {
+        if c < 0x80 {
             ascii_run += 1;
             if ascii_run == 4 {
                 tokens += 1;
                 ascii_run = 0;
             }
-        } else {
+        } else if c & 0xC0 != 0x80 {
+            // UTF-8 lead byte: one non-ASCII char.
             if ascii_run > 0 {
                 tokens += ascii_run.div_ceil(4);
                 ascii_run = 0;
@@ -26,28 +35,68 @@ pub fn estimate_tokens(s: &str) -> usize {
     tokens + ascii_run.div_ceil(4)
 }
 
+/// Byte offset just past the first `n` chars (`s.len()` when shorter).
+/// Pure byte-class scan, no per-char allocation.
+fn head_byte_end(s: &str, n: usize) -> usize {
+    let mut chars = 0usize;
+    for (i, &b) in s.as_bytes().iter().enumerate() {
+        if b & 0xC0 != 0x80 {
+            chars += 1;
+            if chars > n {
+                return i;
+            }
+        }
+    }
+    s.len()
+}
+
+/// Byte offset where the last `n` chars start (0 when longer).
+fn tail_byte_start(s: &str, n: usize) -> usize {
+    let mut chars = 0usize;
+    for (i, &b) in s.as_bytes().iter().enumerate().rev() {
+        if b & 0xC0 != 0x80 {
+            chars += 1;
+            if chars > n {
+                return i + utf8_len(b);
+            }
+        }
+    }
+    0
+}
+
+/// Length in bytes of the scalar starting with lead byte `b`.
+fn utf8_len(b: u8) -> usize {
+    if b < 0x80 {
+        1
+    } else if b & 0xE0 == 0xC0 {
+        2
+    } else if b & 0xF0 == 0xE0 {
+        3
+    } else {
+        4
+    }
+}
+
 /// Keep head+tail within budget; middle replaced with marker.
 pub fn prune_to_budget(s: &str, max_tokens: usize) -> String {
-    let total = estimate_tokens(s);
+    prune_with_total(s, max_tokens, estimate_tokens(s))
+}
+
+/// Shared impl for callers that already estimated `s` (saves a scan).
+fn prune_with_total(s: &str, max_tokens: usize, total: usize) -> String {
     if total <= max_tokens {
         return s.to_string();
     }
     let target_chars = max_tokens.saturating_mul(4).max(256);
     let head_chars = target_chars * 2 / 3;
     let tail_chars = target_chars - head_chars;
-    // Head: first head_chars chars. Tail: last tail_chars chars via one
-    // backward walk (no full second scan). Marker reuses the known total.
-    let head: String = s.chars().take(head_chars).collect();
-    let tail: String = if tail_chars == 0 {
-        String::new()
+    // Slice at char boundaries instead of collecting chars (the old code
+    // built a Vec<char> for the tail). Same head/tail chars, no middleman.
+    let head = &s[..head_byte_end(s, head_chars)];
+    let tail = if tail_chars == 0 {
+        ""
     } else {
-        s.chars()
-            .rev()
-            .take(tail_chars)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
+        &s[tail_byte_start(s, tail_chars)..]
     };
     format!(
         "{head}\n\n...[rdsh pruned {}->{} tokens]...\n\n{tail}",
@@ -56,19 +105,26 @@ pub fn prune_to_budget(s: &str, max_tokens: usize) -> String {
 }
 
 fn read_stdin() -> anyhow::Result<String> {
-    let mut buf = String::new();
+    let mut buf = String::with_capacity(1 << 16);
     std::io::stdin().read_to_string(&mut buf)?;
     Ok(buf)
 }
 
+fn stdout_writer() -> std::io::BufWriter<std::io::StdoutLock<'static>> {
+    std::io::BufWriter::with_capacity(256 * 1024, std::io::stdout().lock())
+}
+
 pub fn cmd_tokens(files: Vec<String>, preview: usize) -> anyhow::Result<()> {
+    let mut out = stdout_writer();
     if files.is_empty() {
         let text = read_stdin()?;
-        println!(
+        writeln!(
+            out,
             "{{\"tokens\": {}, \"chars\": {}}}",
             estimate_tokens(&text),
             text.len()
-        );
+        )?;
+        out.flush()?;
         return Ok(());
     }
     let mut total = 0usize;
@@ -76,15 +132,16 @@ pub fn cmd_tokens(files: Vec<String>, preview: usize) -> anyhow::Result<()> {
         let text = std::fs::read_to_string(f)?;
         let t = estimate_tokens(&text);
         total += t;
-        println!("{t:>8}  {f}");
+        writeln!(out, "{t:>8}  {f}")?;
         if preview > 0 {
-            let pv: String = text.chars().take(preview).collect();
-            println!("  preview: {}", pv.replace('\n', "\\n"));
+            let pv = text[..head_byte_end(&text, preview)].replace('\n', "\\n");
+            writeln!(out, "  preview: {pv}")?;
         }
     }
     if files.len() > 1 {
-        println!("{total:>8}  (total)");
+        writeln!(out, "{total:>8}  (total)")?;
     }
+    out.flush()?;
     Ok(())
 }
 
@@ -93,18 +150,22 @@ pub fn cmd_prune(max_tokens: usize, file: Option<String>) -> anyhow::Result<()> 
         Some(f) => std::fs::read_to_string(&f)?,
         None => read_stdin()?,
     };
-    let raw = match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(v) => match v.get("content").and_then(|c| c.as_str()) {
-            Some(c) if !c.is_empty() => c.to_string(),
-            _ => text.clone(),
-        },
-        Err(_) => text.clone(),
-    };
-    let before = estimate_tokens(&raw);
-    let pruned = prune_to_budget(&raw, max_tokens);
+    // Borrow the content field when present; otherwise the raw text.
+    // The old code cloned the whole input here on the common path.
+    let parsed: Option<serde_json::Value> = serde_json::from_str(&text).ok();
+    let raw: &str = parsed
+        .as_ref()
+        .and_then(|v| v.get("content"))
+        .and_then(|c| c.as_str())
+        .filter(|c| !c.is_empty())
+        .unwrap_or(&text);
+    let before = estimate_tokens(raw);
+    let pruned = prune_with_total(raw, max_tokens, before);
     let after = estimate_tokens(&pruned);
     eprintln!("[rdsh] tokens {before} -> {after} (budget {max_tokens})");
-    println!("{pruned}");
+    let mut out = stdout_writer();
+    writeln!(out, "{pruned}")?;
+    out.flush()?;
     Ok(())
 }
 

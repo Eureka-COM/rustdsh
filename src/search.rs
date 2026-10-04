@@ -3,8 +3,7 @@
 // Stdout matches a sequential scan: per-file hits merge in walk order.
 
 pub fn cmd_search(pattern: &str, dir: &str, max: usize) -> anyhow::Result<()> {
-    let mut files: Vec<std::path::PathBuf> = vec![];
-    collect_files(std::path::Path::new(dir), &mut files);
+    let files = collect_parallel(std::path::Path::new(dir));
     let nfiles = files.len();
     let per_file: Vec<Vec<String>> = if nfiles >= 32 {
         grep_parallel(pattern, &files)
@@ -52,19 +51,135 @@ fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     for e in entries.filter_map(|e| e.ok()) {
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if p.is_dir() {
-            if SKIP.contains(&name.as_str()) || name.starts_with(".") {
-                continue;
-            }
-            collect_files(&p, out);
-        } else if p.is_file() {
-            // No per-file stat here: the 2MB cap is enforced by the bounded
-            // read in grep_one, saving one syscall per file. The stderr file
-            // count therefore includes skipped oversized files (stdout hits
-            // are unchanged).
-            out.push(p);
+        match entry_kind(&e, &p, &name) {
+            EntryKind::Dir => collect_files(&p, out),
+            EntryKind::File => out.push(p),
+            EntryKind::Skip => {}
         }
     }
+}
+
+#[derive(PartialEq)]
+enum EntryKind {
+    Dir,
+    File,
+    Skip,
+}
+
+/// Classify without stat in the common case (dirent type is free).
+/// Symlinks and unknown types fall back to stat, matching the old
+/// follow-links behavior exactly.
+fn entry_kind(e: &std::fs::DirEntry, p: &std::path::Path, name: &str) -> EntryKind {
+    match e.file_type() {
+        Ok(t) if t.is_dir() => {
+            if SKIP.contains(&name) || name.starts_with(".") {
+                EntryKind::Skip
+            } else {
+                EntryKind::Dir
+            }
+        }
+        Ok(t) if t.is_file() => EntryKind::File,
+        _ => {
+            if p.is_dir() {
+                if SKIP.contains(&name) || name.starts_with(".") {
+                    EntryKind::Skip
+                } else {
+                    EntryKind::Dir
+                }
+            } else if p.is_file() {
+                EntryKind::File
+            } else {
+                EntryKind::Skip
+            }
+        }
+    }
+}
+
+/// Walk subdirectories in parallel while preserving exact sequential order:
+/// root entries keep their listing order and each subtree is joined in place.
+/// Falls back to the plain sequential walk for narrow trees.
+fn collect_parallel(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(dir) {
+        Ok(e) => e.filter_map(|e| e.ok()).collect(),
+        Err(_) => return vec![],
+    };
+    let mut subdirs = vec![];
+    for e in &entries {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if entry_kind(e, &e.path(), &name) == EntryKind::Dir {
+            subdirs.push(e.path());
+        }
+    }
+    if subdirs.len() < 2 {
+        let mut out = vec![];
+        collect_files(dir, &mut out);
+        return out;
+    }
+    enum Seg {
+        Files(Vec<std::path::PathBuf>),
+        Sub(std::path::PathBuf),
+    }
+    let mut segs: Vec<Seg> = vec![];
+    let mut pending: Vec<std::path::PathBuf> = vec![];
+    for e in &entries {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        match entry_kind(e, &p, &name) {
+            EntryKind::Dir => {
+                if !pending.is_empty() {
+                    segs.push(Seg::Files(std::mem::take(&mut pending)));
+                }
+                segs.push(Seg::Sub(p));
+            }
+            EntryKind::File => pending.push(p),
+            EntryKind::Skip => {}
+        }
+    }
+    if !pending.is_empty() {
+        segs.push(Seg::Files(pending));
+    }
+    let sub_idx: Vec<usize> = segs
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| matches!(s, Seg::Sub(_)))
+        .map(|(i, _)| i)
+        .collect();
+    let mut resolved: Vec<Vec<std::path::PathBuf>> = vec![];
+    resolved.resize_with(sub_idx.len(), Vec::new);
+    for batch in sub_idx.chunks(8) {
+        std::thread::scope(|s| {
+            let mut handles = vec![];
+            for (k, seg_i) in batch.iter().enumerate() {
+                if let Seg::Sub(p) = &segs[*seg_i] {
+                    handles.push((
+                        k,
+                        s.spawn(move || {
+                            let mut v = vec![];
+                            collect_files(p, &mut v);
+                            v
+                        }),
+                    ));
+                }
+            }
+            for (k, h) in handles {
+                let slot = batch[k];
+                let pos = sub_idx.iter().position(|x| *x == slot).unwrap_or(0);
+                resolved[pos] = h.join().unwrap_or_default();
+            }
+        });
+    }
+    let mut files = vec![];
+    let mut ri = 0;
+    for seg in segs {
+        match seg {
+            Seg::Files(v) => files.extend(v),
+            Seg::Sub(_) => {
+                files.extend(std::mem::take(&mut resolved[ri]));
+                ri += 1;
+            }
+        }
+    }
+    files
 }
 
 /// Read at most 2MB+1 bytes as UTF-8. Returns None for missing files,
@@ -73,7 +188,14 @@ fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 fn read_capped(path: &std::path::Path) -> Option<String> {
     use std::io::Read;
     let f = std::fs::File::open(path).ok()?;
-    let mut buf = Vec::new();
+    // One fstat on the open fd (no path lookup): skip oversized files
+    // without reading, and pre-size the buffer to avoid regrowth.
+    // Same skip set as the old metadata-check combination (verified by diff).
+    let len = f.metadata().ok()?.len();
+    if len > 2_000_000 {
+        return None;
+    }
+    let mut buf = Vec::with_capacity(len as usize);
     f.take(2_000_001).read_to_end(&mut buf).ok()?;
     if buf.len() > 2_000_000 {
         return None;

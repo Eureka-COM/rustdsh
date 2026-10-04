@@ -8,19 +8,6 @@ pub fn dsh_home() -> String {
     })
 }
 
-fn mtime_ms(p: &std::path::Path) -> (u64, String) {
-    match std::fs::metadata(p).and_then(|m| m.modified()) {
-        Ok(t) => {
-            let ms = t
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            (ms, format_time(t))
-        }
-        Err(_) => (0, "-".to_string()),
-    }
-}
-
 // Civil date from epoch secs (Howard Hinnant algorithm), UTC. No chrono needed.
 fn format_time(t: std::time::SystemTime) -> String {
     let secs = t
@@ -79,13 +66,17 @@ fn list_dir(dir: &str, kind: &str) -> anyhow::Result<()> {
     };
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
+        .filter(|e| e.metadata().map(|m| m.is_dir()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
     for n in &names {
-        println!("{n}");
+        let _ = writeln!(out, "{n}");
     }
+    let _ = out.flush();
     eprintln!("[rdsh] {} {kind}(s)", names.len());
     Ok(())
 }
@@ -105,7 +96,7 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
         None => match std::fs::read_dir(&root) {
             Ok(e) => e
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
+                .filter(|e| e.metadata().map(|m| m.is_dir()).unwrap_or(false))
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect(),
             Err(_) => {
@@ -140,14 +131,23 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
         eprintln!("[rdsh] note: zstd CLI not found; token column shows stored-bytes/4 estimate");
     }
     let shown: Vec<&Session> = out.iter().take(limit).collect();
-    let sizes: Vec<Option<u64>> = if tokens && zstd && shown.len() >= 2 {
-        batch_decompressed(&root, &shown)
+    // NOTE: decompressed sizes feed only the tokens column (tokens && zstd).
+    // Otherwise the result is ignored, so skip the zstd subprocesses entirely.
+    let sizes: Vec<Option<u64>> = if tokens && zstd {
+        if shown.len() >= 2 {
+            batch_decompressed(&root, &shown)
+        } else {
+            shown
+                .iter()
+                .map(|s| decompressed_bytes(&root, &s.project, &s.id))
+                .collect()
+        }
     } else {
-        shown
-            .iter()
-            .map(|s| decompressed_bytes(&root, &s.project, &s.id))
-            .collect()
+        vec![None; shown.len()]
     };
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
     for (s, decomp) in shown.iter().zip(sizes.iter()) {
         let tok = if tokens {
             if zstd {
@@ -161,7 +161,8 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
         } else {
             "-".to_string()
         };
-        println!(
+        let _ = writeln!(
+            out,
             "{:>8} {:>10} {} {}/{}",
             human_bytes(s.bytes),
             tok,
@@ -170,6 +171,7 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
             s.id
         );
     }
+    let _ = out.flush();
     eprintln!("[rdsh] {total} session(s), showing up to {limit}");
     Ok(())
 }
@@ -181,7 +183,7 @@ fn scan_project(pdir: &std::path::Path, proj: &str) -> Vec<Session> {
         Err(_) => return v,
     };
     for e in entries.filter_map(|e| e.ok()) {
-        if !e.path().is_dir() {
+        if !e.metadata().map(|m| m.is_dir()).unwrap_or(false) {
             continue;
         }
         let id = e.file_name().to_string_lossy().into_owned();
@@ -200,22 +202,32 @@ fn scan_project(pdir: &std::path::Path, proj: &str) -> Vec<Session> {
 fn dir_size_mtime(dir: &std::path::Path) -> (u64, u64, String) {
     let mut bytes = 0u64;
     let mut mtime = 0u64;
-    let mut mtime_s = "-".to_string();
+    let mut best: Option<std::time::SystemTime> = None;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.filter_map(|e| e.ok()) {
-            let p = e.path();
-            if p.is_file() {
-                if let Ok(m) = e.metadata() {
-                    bytes += m.len();
-                }
-                let (m, ms) = mtime_ms(&p);
-                if m > mtime {
-                    mtime = m;
-                    mtime_s = ms;
+            // One stat per entry: size + mtime come from the same metadata.
+            let md = match e.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if !md.is_file() {
+                continue;
+            }
+            bytes += md.len();
+            if let Ok(t) = md.modified() {
+                let ms = t
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                if ms > mtime {
+                    mtime = ms;
+                    best = Some(t);
                 }
             }
         }
     }
+    // Format once for the newest file instead of once per file.
+    let mtime_s = best.map(format_time).unwrap_or_else(|| "-".to_string());
     (bytes, mtime, mtime_s)
 }
 
@@ -291,16 +303,27 @@ pub fn cmd_logs(tail: usize, grep: Option<String>, file: Option<String>) -> anyh
     };
     eprintln!("[rdsh] reading {}", path.display());
     let text = std::fs::read_to_string(&path)?;
-    let mut lines: Vec<&str> = text.lines().collect();
-    if let Some(pat) = grep.as_deref() {
-        lines.retain(|l| l.contains(pat));
+    // Single pass: count matches while keeping only the last `tail` lines.
+    // (Old code collected every line, then filtered in a second pass.)
+    let pat = grep.as_deref();
+    let mut n = 0usize;
+    let mut kept: std::collections::VecDeque<&str> =
+        std::collections::VecDeque::with_capacity(tail.min(512));
+    for line in text.lines() {
+        if pat.map(|p| line.contains(p)).unwrap_or(true) {
+            n += 1;
+            if tail > 0 {
+                if kept.len() == tail {
+                    kept.pop_front();
+                }
+                kept.push_back(line);
+            }
+        }
     }
-    let n = lines.len();
-    let start = n.saturating_sub(tail);
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    for l in &lines[start..] {
+    for l in &kept {
         let _ = writeln!(out, "{l}");
     }
     let _ = out.flush();
@@ -315,10 +338,20 @@ pub fn cmd_logs(tail: usize, grep: Option<String>, file: Option<String>) -> anyh
 fn latest_file(dir: &str) -> Option<std::path::PathBuf> {
     let mut best: Option<(u64, std::path::PathBuf)> = None;
     for e in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
-        if !e.path().is_file() {
+        // One stat per entry; the display string is not needed here.
+        let md = match e.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !md.is_file() {
             continue;
         }
-        let (m, _) = mtime_ms(&e.path());
+        let m = md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         if best.as_ref().map(|(bm, _)| m > *bm).unwrap_or(true) {
             best = Some((m, e.path()));
         }
@@ -334,7 +367,7 @@ fn dir_names(dir: &str) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map(|e| {
             e.filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
+                .filter(|e| e.metadata().map(|m| m.is_dir()).unwrap_or(false))
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect()
         })
@@ -354,7 +387,7 @@ pub fn sessions_json(limit: usize) -> String {
     let projs: Vec<String> = std::fs::read_dir(&root)
         .map(|e| {
             e.filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
+                .filter(|e| e.metadata().map(|m| m.is_dir()).unwrap_or(false))
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect()
         })
@@ -363,7 +396,7 @@ pub fn sessions_json(limit: usize) -> String {
         let pdir = std::path::Path::new(&root).join(proj);
         if let Ok(entries) = std::fs::read_dir(&pdir) {
             for e in entries.filter_map(|e| e.ok()) {
-                if !e.path().is_dir() {
+                if !e.metadata().map(|m| m.is_dir()).unwrap_or(false) {
                     continue;
                 }
                 let (bytes, _m, mtime_s) = dir_size_mtime(&e.path());

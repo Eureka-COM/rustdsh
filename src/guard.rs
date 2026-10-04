@@ -6,23 +6,26 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     if pattern == "*" || pattern.is_empty() {
         return true;
     }
-    let parts: Vec<&str> = pattern.split("*").collect();
-    if parts.len() == 1 {
+    // No allocation: scan `*`-separated parts without collecting them.
+    if !pattern.contains('*') {
         return text.contains(pattern);
     }
+    if pattern.bytes().all(|b| b == b'*') {
+        return true;
+    }
+    let starts_star = pattern.starts_with('*');
+    let ends_star = pattern.ends_with('*');
     let mut rest = text;
     let mut first = true;
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            first = false;
-            continue;
-        }
-        if first && i == 0 {
+    let mut parts = pattern.split('*').filter(|p| !p.is_empty()).peekable();
+    while let Some(part) = parts.next() {
+        let last = parts.peek().is_none();
+        if first && !starts_star {
             if !rest.starts_with(part) {
                 return false;
             }
             rest = &rest[part.len()..];
-        } else if i == parts.len() - 1 && !pattern.ends_with("*") {
+        } else if last && !ends_star {
             if !rest.ends_with(part) {
                 return false;
             }
@@ -35,18 +38,27 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     }
     true
 }
-fn collect_text(raw: &str) -> String {
+fn collect_text(raw: &str) -> std::borrow::Cow<'_, str> {
+    // Fast path: plain text never parses as the JSON shapes we care about
+    // (object/array/string roots), so borrow it without parsing or copying.
+    // Other scalar roots (numbers/bool/null) hold no strings, and fall back
+    // to `raw` below just the same.
+    let t = raw.trim_start();
+    let try_parse = matches!(t.as_bytes().first(), Some(b'{') | Some(b'[') | Some(b'"'));
+    if !try_parse {
+        return std::borrow::Cow::Borrowed(raw);
+    }
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(v) => {
-            let mut out = String::new();
+            let mut out = String::with_capacity(raw.len());
             push_strings(&v, &mut out);
             if out.is_empty() {
-                raw.to_string()
+                std::borrow::Cow::Borrowed(raw)
             } else {
-                out
+                std::borrow::Cow::Owned(out)
             }
         }
-        Err(_) => raw.to_string(),
+        Err(_) => std::borrow::Cow::Borrowed(raw),
     }
 }
 
@@ -54,7 +66,7 @@ fn push_strings(v: &serde_json::Value, out: &mut String) {
     match v {
         serde_json::Value::String(s) => {
             out.push_str(s);
-            out.push(chr_nl());
+            out.push('\n');
         }
         serde_json::Value::Array(a) => {
             for x in a {
@@ -70,9 +82,6 @@ fn push_strings(v: &serde_json::Value, out: &mut String) {
     }
 }
 
-fn chr_nl() -> char {
-    10 as char
-}
 pub fn cmd_guard(deny: Vec<String>, reason: Option<String>, json_out: bool) -> anyhow::Result<()> {
     use std::io::Read;
     let mut raw = String::new();
