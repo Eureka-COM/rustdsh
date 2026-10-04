@@ -1,0 +1,5 @@
+- insert:
+    - id: rdsh-update-banner
+      name: "rdsh-update-banner"
+      config:
+        demo: false

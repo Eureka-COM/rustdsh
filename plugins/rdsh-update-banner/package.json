@@ -1,0 +1,24 @@
+{
+  "name": "rdsh-update-banner",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "rdsh更新通知バナー（上部shakeアラート）",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "meta": {
+    "title": "rdsh更新通知バナー",
+    "description": "rdsh本体の更新を検知して上部に震えるアラートを出します。閉じたバージョンは記憶します。"
+  }
+}
