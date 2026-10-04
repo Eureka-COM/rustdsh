@@ -122,9 +122,13 @@ When the binary is invoked under the name `dsh`, anything that is not an
 rdsh-native subcommand is delegated verbatim to the original binary, so
 `dsh --version`, `dsh --profile tui`, and `dsh --help` stay byte-identical.
 
-- Original-binary discovery order: `DSH_ORIG_BIN` → `~/.config/rdsh/origin` →
+- Original-binary discovery order: `RDSH_ORIG_BIN` (legacy `DSH_ORIG_BIN` still
+honored) → `~/.config/rdsh/origin` →
   sibling backups (`dsh-orig`, `dsh.orig`, `dsh.real`) → `PATH` (self excluded) →
   known npm install paths
+- Naming follows dsh convention: kebab-case commands/flags like the original
+  (`dump-config`, `--from-default-profile`), while the `DSH_` env namespace stays
+  owned by dsh itself — rdsh-private keys live under `RDSH_`
 - One-shot escapes: `RDSH_PASSTHROUGH=1 dsh ...` (no slim env),
   `RDSH_DRY_RUN=1 dsh ...` (print only)
 - Name shadowing: a bare `dsh tokens` runs the rdsh subcommand; a profile
