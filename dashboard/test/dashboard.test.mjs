@@ -13,6 +13,7 @@ import { identity, applyOperation, ProjectStore } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
 import { checkPortConfig } from "../tailscale.mjs";
 import { feedbackSince } from "../mcp.mjs";
+import { proxyHarness } from "../harness.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -69,6 +70,26 @@ test("Serve preserves other services and refuses public Funnel or port conflicts
       ),
     /Funnel/,
   );
+});
+test("Harness proxy removes dashboard credentials before forwarding", async (t) => {
+  let received;
+  const upstream = http.createServer((req, res) => {
+    received = req.headers;
+    res.end("ok");
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => upstream.close());
+  const front = http.createServer((req, res) =>
+    proxyHarness(req, res, upstream.address().port, "rdsh_harness", "admin-key"),
+  );
+  await new Promise((resolve) => front.listen(0, "127.0.0.1", resolve));
+  t.after(() => front.close());
+  const response = await fetch(`http://127.0.0.1:${front.address().port}/`, {
+    headers: { cookie: "rdsh_harness=secret; upstream=keep", authorization: "Bearer admin-key" },
+  });
+  assert.equal(await response.text(), "ok");
+  assert.equal(received.cookie, "upstream=keep");
+  assert.equal(received.authorization, undefined);
 });
 test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work together", async (t) => {
   const temporary = await fs.mkdtemp(
@@ -129,17 +150,12 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     request.on("error", reject);
   });
   assert.equal(rebindingStatus, 403);
-  const bootstrap = await fetch(runtime.browser_url, { redirect: "manual" });
-  assert.equal(bootstrap.status, 303);
-  assert.match(
-    bootstrap.headers.get("set-cookie"),
-    /HttpOnly; SameSite=Strict/,
-  );
-  assert.equal(bootstrap.headers.get("location"), "/");
-  const cookie = bootstrap.headers.get("set-cookie").split(";")[0];
-  const html = await (
-    await fetch(dashboard.localUrl, { headers: { cookie } })
-  ).text();
+  const browserToken = new URL(runtime.browser_url).hash.slice("#key=".length);
+  const browserHeaders = { "x-rdsh-browser-token": browserToken };
+  const bootstrap = await fetch(runtime.browser_url);
+  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.headers.get("set-cookie"), null);
+  const html = await bootstrap.text();
   assert.match(html, /未回答の質問/);
   assert.equal(
     (await fetch(dashboard.localUrl + "api/qr.svg", { headers })).status,
@@ -149,7 +165,7 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     (
       await fetch(dashboard.localUrl + "mcp", {
         method: "POST",
-        headers: { cookie, "content-type": "application/json" },
+        headers: { ...browserHeaders, "content-type": "application/json" },
         body: "{}",
       })
     ).status,
@@ -161,7 +177,7 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   );
   await client.connect(
     new StreamableHTTPClientTransport(new URL(dashboard.localUrl + "mcp"), {
-      requestInit: { headers },
+      requestInit: { headers: { ...headers, authorization: `Bearer ${runtime.mcp_token}` } },
     }),
   );
   assert.equal((await client.listTools()).tools.length, 6);
@@ -204,6 +220,19 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     type: "artifact",
     artifact: "reference-only.png",
   });
+  const forgedAnswer = await fetch(dashboard.localUrl + "api/update/answer", {
+    method: "POST",
+    headers: { ...headers, authorization: `Bearer ${runtime.mcp_token}` },
+    body: JSON.stringify({ id: "Q1", answer: "forged" }),
+  });
+  assert.equal(forgedAnswer.status, 401);
+  assert.equal(dashboard.store.value.questions[0].answer, null);
+  const adminAnswer = await fetch(dashboard.localUrl + "api/update/answer", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ id: "Q1", answer: "admin forged" }),
+  });
+  assert.equal(adminAnswer.status, 403);
   assert.equal(other.store.value.tasks.length, 0);
   assert.equal(other.store.value.questions.length, 0);
   const error = await client.callTool({
@@ -215,7 +244,7 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   const answer = await fetch(dashboard.localUrl + "api/update/answer", {
     method: "POST",
     headers: {
-      cookie,
+      ...browserHeaders,
       "content-type": "application/json",
       origin: new URL(dashboard.localUrl).origin,
     },

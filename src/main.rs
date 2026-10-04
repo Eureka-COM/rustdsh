@@ -4,6 +4,7 @@ mod compact;
 mod dsh_args;
 mod guard;
 mod inspect;
+mod local_http;
 mod passthrough;
 mod search;
 mod serve;

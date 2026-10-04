@@ -1,13 +1,21 @@
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.startsWith("/_rdsh") ? "/_rdsh/" : "/";
+const browserToken = base === "/"
+  ? new URLSearchParams(location.hash.slice(1)).get("key") || sessionStorage.getItem("rdsh_project_browser_token") || ""
+  : "";
+if (browserToken) {
+  sessionStorage.setItem("rdsh_project_browser_token", browserToken);
+  history.replaceState(null, "", location.pathname + location.search);
+}
 async function api(route, body) {
+  const headers = browserToken ? { "x-rdsh-browser-token": browserToken } : {};
   const response = await fetch(
     base + "api/" + route,
     body === undefined
-      ? {}
+      ? { headers }
       : {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { ...headers, "content-type": "application/json" },
           body: JSON.stringify(body),
         },
   );
@@ -227,7 +235,8 @@ async function refreshState() {
     $("connection").textContent = e.message;
   }
 }
-function renderShare(config) {
+let qrObjectUrl = null;
+async function renderShare(config) {
   const share = config.share;
   $("share-message").textContent = share.message;
   $("share-url").textContent = share.url || "";
@@ -237,7 +246,16 @@ function renderShare(config) {
     share.state === "login_required"
       ? "Tailscaleへのログイン待ち"
       : "接続準備中";
-  if (share.url) $("qr").src = base + "api/qr.svg?updated=" + Date.now();
+  if (qrObjectUrl) URL.revokeObjectURL(qrObjectUrl);
+  qrObjectUrl = null;
+  if (share.url) {
+    const response = await fetch(base + "api/qr.svg?updated=" + Date.now(), {
+      headers: browserToken ? { "x-rdsh-browser-token": browserToken } : {},
+    });
+    if (!response.ok) throw new Error("QRコードを取得できません");
+    qrObjectUrl = URL.createObjectURL(await response.blob());
+    $("qr").src = qrObjectUrl;
+  }
   $("consent").hidden = !share.consent_url;
   if (share.consent_url) $("consent").href = share.consent_url;
   $("mcp-info").textContent =
@@ -259,7 +277,7 @@ $("share-refresh").addEventListener("click", async () => {
   $("share-refresh").disabled = true;
   try {
     await api("share/refresh", {});
-    renderShare(await api("config"));
+    await renderShare(await api("config"));
   } catch (e) {
     $("share-message").textContent = e.message;
   } finally {
@@ -268,7 +286,7 @@ $("share-refresh").addEventListener("click", async () => {
 });
 try {
   const config = await api("config");
-  renderShare(config);
+  await renderShare(config);
   if (config.kind === "harness") {
     $("kind").textContent = "DEEPSEEK HARNESS";
     $("title").textContent = "Harnessを開く";
@@ -284,7 +302,7 @@ try {
     $("location").textContent = config.project.root;
     document.title = config.project.name + " · Project dashboard";
     await refreshState();
-    const source = new EventSource(base + "api/live");
+    const source = new EventSource(base + "api/live?key=" + encodeURIComponent(browserToken));
     source.addEventListener("changed", refreshState);
     source.onerror = () => {
       $("connection").textContent = "再接続中…";

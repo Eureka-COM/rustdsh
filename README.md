@@ -148,6 +148,11 @@ rdsh setup           # first-run wizard: import, DeepSeek-key paste, --login/--o
 rdsh setup --web     # floating glass setup UI on localhost (browser auto-opens)
 ```
 
+`setup --web` は起動ごとに鍵を発行し、`#key=...` を含む URL を表示します。
+ブラウザーで開くと鍵はそのタブに保存されます。API キーの保存と画面の終了には
+この鍵が必要です。接続状態の読み取りにも同じ鍵が必要です。
+端末に表示された URL を他人と共有しないでください。
+
 Booting (`rdsh tui`, `dump-config`, `plugin`) auto-syncs first, so logging
 in with Codex/opencode is enough. `RDSH_AUTH_AUTOSYNC=0` disables it.
 A dsh-side token that is newer is never overwritten, and non-grant
@@ -227,7 +232,7 @@ Co-use notes:
 
 ```sh
 rdsh serve
-# open http://127.0.0.1:3080/ (localhost only, read-only API)
+# open the URL containing #key=... printed by rdsh (localhost only)
 # if the port is taken (the dsh web GUI also uses 3080), try --port 38080
 ```
 
@@ -241,8 +246,9 @@ rdsh serve
 | `GET /api/sessions?limit=20` | recent sessions |
 | `GET /api/skills`, `/api/profiles` | name lists |
 
-Dependency-free (std-only HTTP server plus one embedded HTML file, no CDN,
-works offline).
+`/api/version` 以外の API は起動ごとの鍵を `X-RDSH-Token` ヘッダーで要求します。
+ブラウザー画面は表示された URL の鍵を使います。HTTP は本文を最大 64 KiB まで
+読み取り、同時接続を 32 件に制限します。画面は CDN を使わずオフラインで動作します。
 
 ### Private project dashboards and phone access
 

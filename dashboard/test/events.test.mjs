@@ -195,7 +195,7 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
     const response = await fetch(dashboard.localUrl + "mcp", {
       method: "POST",
       headers: {
-        authorization: "Bearer " + runtime.token,
+        authorization: "Bearer " + runtime.mcp_token,
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": "2026-07-28",
@@ -275,9 +275,9 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
     tailscale: false,
     webhookPost,
   });
-  runtime.token = JSON.parse(
+  runtime.mcp_token = JSON.parse(
     await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  ).token;
+  ).mcp_token;
   await request("events/unsubscribe", subscription);
   await request("events/unsubscribe", subscription);
 });

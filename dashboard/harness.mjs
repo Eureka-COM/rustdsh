@@ -92,9 +92,19 @@ export async function startHarness(port, frontPort) {
     throw error;
   }
 }
-export function proxyHarness(req, res, port) {
-  // Only authenticated same-origin callers reach this proxy. dsh still checks its own process token.
+function upstreamHeaders(req, port, cookieName, adminToken) {
   const headers = { ...req.headers, host: `127.0.0.1:${port}` };
+  if (headers.cookie) {
+    headers.cookie = headers.cookie.split(";").map((item) => item.trim())
+      .filter((item) => item.split("=", 1)[0] !== cookieName).join("; ");
+    if (!headers.cookie) delete headers.cookie;
+  }
+  if (headers.authorization === `Bearer ${adminToken}`) delete headers.authorization;
+  return headers;
+}
+export function proxyHarness(req, res, port, cookieName, adminToken) {
+  // Only authenticated same-origin callers reach this proxy. dsh still checks its own process token.
+  const headers = upstreamHeaders(req, port, cookieName, adminToken);
   if (headers.origin) headers.origin = `http://127.0.0.1:${port}`;
   if (headers.referer) headers.referer = `http://127.0.0.1:${port}/`;
   delete headers["x-forwarded-host"];
@@ -112,9 +122,9 @@ export function proxyHarness(req, res, port) {
   });
   req.pipe(upstream);
 }
-export function upgradeHarness(req, socket, head, port) {
+export function upgradeHarness(req, socket, head, port, cookieName, adminToken) {
   const upstream = net.connect(port, "127.0.0.1", () => {
-    const headers = { ...req.headers, host: `127.0.0.1:${port}` };
+    const headers = upstreamHeaders(req, port, cookieName, adminToken);
     if (headers.origin) headers.origin = `http://127.0.0.1:${port}`;
     const raw = `${req.method} ${req.url} HTTP/1.1\r\n${Object.entries(headers)
       .map(([key, value]) => `${key}: ${value}`)
