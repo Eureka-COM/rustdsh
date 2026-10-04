@@ -47,6 +47,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $h, $d | Out-Null
           $env:HOME = $h
           $env:DSH_HOME = $d
+          $env:DSH_ORIG_BIN = (Resolve-Path ./target/debug/rdsh.exe).Path
           ./target/debug/rdsh.exe --version
           $auth = ./target/debug/rdsh.exe auth --json | Out-String
           if ($auth -notmatch 'records') { throw 'auth json missing records field' }

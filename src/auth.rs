@@ -756,7 +756,9 @@ pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
         }
         let recs: Vec<serde_json::Value> = decisions
             .iter()
-            .map(|d| serde_json::json!({"provider": d.provider, "from": d.from, "action": d.action, "detail": d.detail}))
+            .map(|d| {
+                serde_json::json!({"provider": d.provider, "from": d.from, "action": d.action, "detail": d.detail})
+            })
             .collect();
         println!(
             "{}",
@@ -801,6 +803,19 @@ pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
     }
     for d in &decisions {
         println!("[rdsh auth] {}: {}", d.provider, d.detail);
+    }
+    // What the dsh GUI model picker boots by default, and whether its
+    // credential is already here (auto-detected from profile patches).
+    for need in provider_needs() {
+        let mark = match need.state {
+            "ok" => "credential ok",
+            "importable" => "credential importable: run `rdsh auth --import`",
+            _ => "credential missing: run `rdsh setup`",
+        };
+        println!(
+            "[rdsh auth] dsh default: {} {}/{} ({}, {})",
+            need.profile, need.provider, need.model, need.via, mark
+        );
     }
     for n in &notes {
         println!("[rdsh auth] note: {n}");
@@ -1084,6 +1099,149 @@ fn open_settings_dirs(json: bool) {
     }
 }
 
+/// One provider route a dsh profile boots by default, with how it
+/// authenticates and whether that credential is currently visible.
+#[derive(Debug, Clone)]
+pub struct ProviderNeed {
+    pub profile: String,
+    pub provider: String,
+    pub model: String,
+    pub via: String,
+    pub state: &'static str,
+}
+
+/// Read every profile's `agent-default-model` entry (what the dsh GUI
+/// model picker shows) and resolve whether its credential exists:
+/// an OAuth record, a fresher external grant (`importable`), or the
+/// provider block's `apiKeyEnv` ref/env. This is the "detect what dsh
+/// will use and bring it over" half of first-run setup.
+pub fn provider_needs() -> Vec<ProviderNeed> {
+    let (grants, keys, _notes, doc, _decisions, _path) = plan();
+    let root = format!("{}/profiles", crate::inspect::dsh_home());
+    let mut profiles: Vec<String> = std::fs::read_dir(&root)
+        .map(|e| {
+            e.filter_map(|x| x.ok())
+                .filter(|x| x.metadata().map(|m| m.is_dir()).unwrap_or(false))
+                .map(|x| x.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    profiles.sort();
+    let mut out = Vec::new();
+    for p in profiles {
+        let text = match std::fs::read_to_string(format!("{root}/{p}/cordis.patch.yml")) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let (provider, model) = match parse_default_model(&text) {
+            Some(x) => x,
+            None => continue,
+        };
+        let key = format!("{RECORD_SCOPE}/{provider}");
+        let has_record = doc
+            .grants
+            .get(&key)
+            .and_then(|g| g.access.clone())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        let api_key_env = parse_api_key_env(&text, &provider);
+        let has_key = match &api_key_env {
+            Some(n) => doc.refs.get(n).map(|v| !v.is_empty()).unwrap_or(false) || env_key_set(n),
+            None => keys.iter().any(|k| k.name == key_name(&provider)),
+        };
+        let importable = grants.iter().any(|g| g.provider == provider);
+        let (via, state) = if has_record || has_key {
+            (via_name(&api_key_env), "ok")
+        } else if importable {
+            ("oauth".to_string(), "importable")
+        } else {
+            (via_name(&api_key_env), "missing")
+        };
+        out.push(ProviderNeed {
+            profile: p,
+            provider,
+            model,
+            via,
+            state,
+        });
+    }
+    out
+}
+
+/// Ref/env name for well-known API-key routes (mirrors profile `apiKeyEnv`).
+fn key_name(provider: &str) -> String {
+    provider.to_uppercase().replace('-', "_") + "_API_KEY"
+}
+
+fn via_name(api_key_env: &Option<String>) -> String {
+    match api_key_env {
+        Some(n) => format!("key {n}"),
+        None => "oauth".to_string(),
+    }
+}
+
+fn parse_default_model(text: &str) -> Option<(String, String)> {
+    let mut lines = text.lines();
+    while let Some(l) = lines.next() {
+        if l.trim() == "- id: agent-default-model" {
+            let mut prov: Option<String> = None;
+            let mut model = String::new();
+            for l2 in lines.by_ref().take(12) {
+                let t = l2.trim();
+                if t.starts_with("- id:") || t == "- insert:" {
+                    break;
+                }
+                if let Some(v) = t.strip_prefix("provider:") {
+                    prov = Some(v.trim().to_string());
+                }
+                if let Some(v) = t.strip_prefix("model:") {
+                    model = v.trim().to_string();
+                }
+                if prov.is_some() && !model.is_empty() {
+                    break;
+                }
+            }
+            if let Some(p) = prov {
+                return Some((p, model));
+            }
+        }
+    }
+    None
+}
+
+/// `apiKeyEnv:` declared on a provider block (`<provider>:` mapping).
+fn parse_api_key_env(text: &str, provider: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        if t == format!("{provider}:") {
+            let base = indent_of(lines[i]);
+            i += 1;
+            while i < lines.len() {
+                let l = lines[i];
+                let ind = indent_of(l);
+                let tt = l.trim();
+                if !tt.is_empty() && ind <= base && (tt.ends_with(':') || tt.starts_with("- ")) {
+                    break;
+                }
+                if ind > base {
+                    if let Some(v) = tt.strip_prefix("apiKeyEnv:") {
+                        let v = v.trim().to_string();
+                        if !v.is_empty() {
+                            return Some(v);
+                        }
+                    }
+                }
+                i += 1;
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
 fn print_guide() {
     let creds = creds_path();
     let cfg =
@@ -1185,6 +1343,66 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool) -> anyhow::Resu
     Ok(())
 }
 
+/// Status document for the floating setup UI (`rdsh setup --web`).
+/// Read-only and secret-free: refs appear by name only, never by value.
+pub fn setup_status_json() -> String {
+    let (grants, keys, notes, doc, decisions, path) = plan();
+    let h = home().unwrap_or_default();
+    let mut sources = Vec::new();
+    if grants.iter().any(|g| g.from == "codex") {
+        sources.push(serde_json::json!({"name":"codex","path": format!("{h}/.codex/auth.json")}));
+    }
+    if grants.iter().any(|g| g.from == "opencode") {
+        let d = data_dir().unwrap_or_default();
+        sources
+            .push(serde_json::json!({"name":"opencode","path": format!("{d}/opencode/auth.json")}));
+    }
+    let recs: Vec<serde_json::Value> = decisions
+        .iter()
+        .map(|d| {
+            serde_json::json!({"provider": d.provider, "from": d.from, "action": d.action, "detail": d.detail})
+        })
+        .collect();
+    serde_json::json!({
+        "credentials": path,
+        "sources": sources,
+        "records": recs,
+        "refs_known": keys.iter().map(|k| &k.name).collect::<Vec<_>>(),
+        "refs_stored": doc.refs.keys().cloned().collect::<Vec<_>>(),
+        "notes": notes,
+        "needed": setup_needed(),
+        "opencode_config": opencode_config_path(),
+        "defaults": provider_needs()
+            .iter()
+            .map(|n| {
+                serde_json::json!({"profile": n.profile, "provider": n.provider, "model": n.model, "via": n.via, "state": n.state})
+            })
+            .collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+/// Ref names the setup UI is allowed to store (allowlist: never arbitrary keys).
+const SETUP_KEY_ALLOWLIST: &[&str] = &["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"];
+
+/// Store a pasted API key submitted from the floating setup UI.
+/// Same 0600 line-surgery path as the terminal wizard.
+pub(crate) fn setup_store_key(name: &str, value: &str) -> anyhow::Result<bool> {
+    if !SETUP_KEY_ALLOWLIST.contains(&name) {
+        anyhow::bail!("refusing to store unknown credential {name}");
+    }
+    let v = value.trim();
+    if v.is_empty() || v.len() > 512 {
+        anyhow::bail!("empty or oversized value");
+    }
+    store_ref(name, v)
+}
+
+/// Open a URL in the OS browser (best effort, used by `setup --web`).
+pub(crate) fn open_browser(url: &str) -> anyhow::Result<()> {
+    open_path(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1281,6 +1499,33 @@ mod tests {
             expires: Some(300),
         };
         assert!(!fresher_than(&src, &newer, 20));
+    }
+
+    #[test]
+    fn parse_patches() {
+        let text = "- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n        apiKeyEnv: OPENCODE_GO_API_KEY\n- id: agent-default-model\n  config:\n    provider: opencode-go\n    model: muse-spark-1.3-contributor\n";
+        assert_eq!(
+            parse_default_model(text),
+            Some((
+                "opencode-go".to_string(),
+                "muse-spark-1.3-contributor".to_string()
+            ))
+        );
+        assert_eq!(
+            parse_api_key_env(text, "opencode-go"),
+            Some("OPENCODE_GO_API_KEY".to_string())
+        );
+        assert!(parse_api_key_env(text, "openai-codex").is_none());
+        assert!(parse_default_model("nothing here").is_none());
+    }
+
+    #[test]
+    fn setup_status_shape() {
+        let v: serde_json::Value = serde_json::from_str(&setup_status_json()).unwrap();
+        assert!(v.get("credentials").is_some());
+        assert!(v.get("records").unwrap().is_array());
+        assert!(v.get("needed").unwrap().is_boolean());
+        assert!(v.get("refs_stored").unwrap().is_array());
     }
 
     #[test]

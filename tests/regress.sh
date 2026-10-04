@@ -77,8 +77,44 @@ FR=/tmp/rdsh-fr-AA
 mkdir -p $FR/pkg $FR/bin $FR/latest/download
 cp "$BIN" $FR/pkg/rdsh
 for a in rdsh-linux-x64 rdsh-macos-arm64 rdsh-macos-x64; do tar -czf "$FR/latest/download/$a.tar.gz" -C $FR/pkg rdsh; done
-if RDSH_RELEASE_BASE="file://$FR" DSH_HOME="$FR/dsh" sh ./install.sh --from-release --prefix="$FR/bin" >/dev/null 2>&1 && "$FR/bin/rdsh" --version 2>/dev/null | grep -q "rdsh"; then ok "from-release install"; else echo "FAIL(output): from-release install"; exit 1; fi
+# NOTE: install.sh needs bash (pipefail); `sh` is dash on Ubuntu CI.
+if RDSH_RELEASE_BASE="file://$FR" DSH_HOME="$FR/dsh" bash ./install.sh --from-release --prefix="$FR/bin" >$FR/install.log 2>&1 && "$FR/bin/rdsh" --version 2>/dev/null | grep -q "rdsh"; then ok "from-release install"; else echo "FAIL(output): from-release install"; tail -n 8 $FR/install.log; exit 1; fi
+printf "version: 1\nrecords:\n  llm-pi-ai/openai-codex:\n    kind: api-key\n    key: sk-user-key\n" > "$AB/dsh/.credentials.yaml"
+if HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN auth --import >/dev/null 2>&1 && grep -q "kind: api-key" "$AB/dsh/.credentials.yaml" && HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN auth 2>/dev/null | grep -q "left alone"; then ok "auth keeps api-key records"; else echo "FAIL(output): auth keeps api-key records"; exit 1; fi
 rm -rf $FR
+SW=/tmp/rdsh-setupweb-AA
+mkdir -p $SW/home $SW/dsh
+HOME="$SW/home" DSH_HOME="$SW/dsh" $BIN setup --web --port 38082 >/dev/null 2>&1 & SRV=$!
+sleep 1
+if curl -fsS --max-time 5 http://127.0.0.1:38082/api/status 2>/dev/null | grep -q "\"needed\":true"; then ok "setup --web status"; else echo "FAIL(output): setup --web status"; kill $SRV 2>/dev/null; exit 1; fi
+if printf "%s" "{\"name\":\"DEEPSEEK_API_KEY\",\"value\":\"smoke-only-key\"}" | curl -fsS --max-time 5 -X POST -H "Content-Type: application/json" --data-binary "@-" http://127.0.0.1:38082/api/key 2>/dev/null | grep -q "\"stored\":true"; then ok "setup --web key store"; else echo "FAIL(output): setup --web key store"; kill $SRV 2>/dev/null; exit 1; fi
+curl -fsS --max-time 5 -X POST http://127.0.0.1:38082/api/done >/dev/null 2>&1
+wait $SRV 2>/dev/null || true
+rm -rf $SW
+SWB=/tmp/rdsh-searchweb-AA
+mkdir -p $SWB
+printf "%s" "<html><body><article class=\"result\"><h3><a href=\"https://example.com/a\">Alpha result</a></h3><p class=\"content\">first snippet</p></article><article class=\"result\"><h3><a href=\"https://example.com/b\">Beta result</a></h3></article></body></html>" > $SWB/fixture.html
+python3 - "$SWB/fixture.html" 38083 <<PYEOF >/dev/null 2>&1 &
+import http.server, sys
+page = open(sys.argv[1], "rb").read()
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = page if self.path.startswith("/search") else b"nope"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
+PYEOF
+HTTPSRV=$!
+sleep 1
+if SEARXNG_URL="http://127.0.0.1:38083" $BIN search-web "hello world" --limit 5 2>/dev/null | grep -q "Alpha result"; then ok "search-web via fixture"; else echo "FAIL(output): search-web via fixture"; kill $HTTPSRV 2>/dev/null; exit 1; fi
+kill $HTTPSRV 2>/dev/null
+wait $HTTPSRV 2>/dev/null || true
+rm -rf $SWB
 rm -rf $AB
 rm -rf $SB /tmp/rr-in.txt /tmp/rr-out /tmp/rr-err
 echo "ALL PASS ($pass checks)"

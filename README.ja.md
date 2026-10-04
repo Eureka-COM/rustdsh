@@ -108,6 +108,7 @@ rdsh --dry-run tui -- --resume abc  # 実行内容だけ表示
 rdsh tokens ./AGENTS.md             # 入力トークン見積（約4文字=1トークン、CJKは1字1トークン）
 echo ... | rdsh prune --max-tokens 4000   # head+tailを残して予算内に切り詰め
 rdsh search TODO --dir . --max 100 # 再帰grep（並列・出力順は逐次と同一）
+rdsh search-web "rust async" --limit 5  # Web検索（SearXNG経由、既定 http://127.0.0.1:8888、`$SEARXNG_URL` で変更）
 rdsh compact ./s.jsonl --max-tokens 8000 # セッションJSONLの圧縮（元ファイル不変）
 rdsh sessions --limit 20 --tokens  # セッション一覧＋展開後トークン見積
 rdsh logs --tail 50 --grep ERROR   # 起動ログの参照
@@ -131,6 +132,7 @@ rdsh auth            # 状態確認：見つかったログインと認識済み
 rdsh auth --import   # 不足・古い分だけ書込（0600、他エントリ不変）
 rdsh auth --json     # 機械可読の状態出力
 rdsh setup           # 初回ウィザード：取込、キー貼付、--login/--open
+rdsh setup --web     # フローティングのセットアップUI（localhost、ブラウザ自動表示）
 ```
 
 起動時（`rdsh tui`・`dump-config`・`plugin`）は先に自動同期するので、
@@ -217,8 +219,8 @@ rdsh serve
 
 ### 検証（すべて実行済み）
 
-- `cargo test`：21件通過（トークン計算・ワイルドカード・引数分割・auth系）
-- `tests/regress.sh`：31件通過（全サブコマンド・異常系・auth取込往復・setup初回導線・dsh名委譲の隔離検証）
+- `cargo test`：26件通過（トークン計算・ワイルドカード・引数分割・auth系）
+- `tests/regress.sh`：35件通過（全サブコマンド・異常系・auth取込往復・setup初回導線・dsh名委譲の隔離検証）
 - 高速化の前後で出力をdiff比較し、完全一致を確認（300件search・上限打ち切りsearch）
 - 実置換後に `dsh --version`（委譲）と `dsh guard`（新機能）を実機確認
 
@@ -239,12 +241,14 @@ rdsh serve
 - `src/slim.rs` — slim env定義
 - `src/tokens.rs` — トークン推定・prune
 - `src/search.rs` — 順序保持の並列grep
+- `src/websearch.rs` — SearXNG Web検索（`search-web`、APIキー不要）
 - `src/compact.rs` — JSONLセッション圧縮
 - `src/inspect.rs` — sessions/logs/skills/profiles参照
 - `src/guard.rs` — hooks.json用ガード
 - `src/serve.rs`＋`src/ui.html` — ローカルWeb UI
+- `src/setup_web.rs`＋`src/setup.html` — フローティングのセットアップUI（`setup --web`）
 - `install.sh` — 導入（`--as-dsh`置換／`--restore`復元）
-- `tests/regress.sh` — CLI回帰試験（31件）
+- `tests/regress.sh` — CLI回帰試験（35件）
 
 ## よくある質問
 

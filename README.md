@@ -121,6 +121,7 @@ rdsh --dry-run tui -- --resume abc  # print what would be executed
 rdsh tokens ./AGENTS.md               # estimate input tokens (~4 chars = 1, CJK = 1 each)
 echo ... | rdsh prune --max-tokens 4000  # keep head+tail within a token budget
 rdsh search TODO --dir . --max 100   # recursive grep (parallel, same order as sequential)
+rdsh search-web "rust async" --limit 5  # web search via SearXNG (default http://127.0.0.1:8888, $SEARXNG_URL wins)
 rdsh compact ./s.jsonl --max-tokens 8000 # compact a session transcript (source untouched)
 rdsh sessions --limit 20 --tokens    # list sessions with decompressed token estimates
 rdsh logs --tail 50 --grep ERROR     # inspect startup logs
@@ -144,6 +145,7 @@ rdsh auth            # status: what was found, what dsh already recognizes
 rdsh auth --import   # write missing/older grants (0600, other entries untouched)
 rdsh auth --json     # machine-readable status
 rdsh setup           # first-run wizard: import, DeepSeek-key paste, --login/--open
+rdsh setup --web     # floating glass setup UI on localhost (browser auto-opens)
 ```
 
 Booting (`rdsh tui`, `dump-config`, `plugin`) auto-syncs first, so logging
@@ -253,9 +255,9 @@ dumps, missing `--profile`) are reproduced in Rust.
 
 ### Verification (all executed)
 
-- `cargo test`: 21 unit tests pass (token math, wildcard matcher, arg splitter, auth splice/freshness, setup lang).
+- `cargo test`: 26 unit tests pass (token math, wildcard matcher, arg splitter, auth splice/freshness, setup lang).
   The suite caught and fixed one real matcher bug (single-pattern substring).
-- `tests/regress.sh`: 31 CLI checks pass (every subcommand, error paths,
+- `tests/regress.sh`: 35 CLI checks pass (every subcommand, error paths,
   auth import round-trip, setup first-run flow, and sandboxed `dsh`-name
   delegation against a fake original).
 - Optimization diffs: old vs. new binary outputs compared byte-for-byte
@@ -282,20 +284,22 @@ dumps, missing `--profile`) are reproduced in Rust.
 - `src/slim.rs` — slim environment definition
 - `src/tokens.rs` — token estimation and pruning
 - `src/search.rs` — order-preserving parallel grep
+- `src/websearch.rs` — SearXNG web search (`search-web`, no API key)
 - `src/compact.rs` — session transcript compaction
 - `src/inspect.rs` — read-only sessions/logs/skills/profiles views
 - `src/guard.rs` — hooks.json guard command
 - `src/serve.rs` + `src/ui.html` — local web dashboard
+- `src/setup_web.rs` + `src/setup.html` — floating glass setup UI (`setup --web`)
 - `install.sh` — installer (`--as-dsh` shadow / `--restore`)
-- `tests/regress.sh` — CLI regression suite (31 checks)
+- `tests/regress.sh` — CLI regression suite (35 checks)
 
 ## Contributing
 
 ```sh
 cargo fmt --check      # must be clean
 cargo clippy --all-targets -- -D warnings   # must be clean
-cargo test             # 21 unit tests
-BIN=./target/debug/rdsh sh tests/regress.sh # 31 CLI checks (needs cargo build first)
+cargo test             # 26 unit tests
+BIN=./target/debug/rdsh sh tests/regress.sh # 35 CLI checks (needs cargo build first)
 ```
 
 No new dependencies without discussion: binary size and startup time are

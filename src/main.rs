@@ -7,8 +7,10 @@ mod inspect;
 mod passthrough;
 mod search;
 mod serve;
+mod setup_web;
 mod slim;
 mod tokens;
+mod websearch;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -69,6 +71,15 @@ enum Commands {
         #[arg(long = "max", default_value_t = 100)]
         max: usize,
     },
+    /// Web search through SearXNG (default http://127.0.0.1:8888, $SEARXNG_URL wins)
+    #[command(name = "search-web")]
+    SearchWeb {
+        query: String,
+        #[arg(long = "limit", default_value_t = 10)]
+        limit: usize,
+        #[arg(long = "json")]
+        json: bool,
+    },
     Compact {
         file: String,
         #[arg(long = "max-tokens", default_value_t = 8000)]
@@ -122,6 +133,12 @@ enum Commands {
         json: bool,
         #[arg(long = "yes")]
         yes: bool,
+        /// Floating glass setup UI on localhost (auto-opens a browser tab)
+        #[arg(long = "web")]
+        web: bool,
+        /// Local port for --web (0 = random)
+        #[arg(long = "port", default_value_t = 0)]
+        port: u16,
     },
     Bench {
         #[arg(long = "n", default_value_t = 5)]
@@ -160,6 +177,7 @@ const NATIVE_FIRST: &[&str] = &[
     "guard",
     "auth",
     "setup",
+    "search-web",
 ];
 
 fn invoked_as_dsh() -> bool {
@@ -198,6 +216,9 @@ fn main() {
         Some(Commands::Tokens { files, preview }) => tokens::cmd_tokens(files, preview),
         Some(Commands::Prune { max_tokens, file }) => tokens::cmd_prune(max_tokens, file),
         Some(Commands::Search { pattern, dir, max }) => search::cmd_search(&pattern, &dir, max),
+        Some(Commands::SearchWeb { query, limit, json }) => {
+            websearch::cmd_search_web(&query, limit, json)
+        }
         Some(Commands::Compact { file, max_tokens }) => compact::cmd_compact(&file, max_tokens),
         Some(Commands::Doctor) => doctor(),
         Some(Commands::Sessions {
@@ -217,7 +238,15 @@ fn main() {
             login,
             json,
             yes,
-        }) => auth::cmd_setup(open, login, json, yes),
+            web,
+            port,
+        }) => {
+            if web {
+                setup_web::cmd_setup_web(port)
+            } else {
+                auth::cmd_setup(open, login, json, yes)
+            }
+        }
         Some(Commands::DumpConfig { profile, native }) => {
             let p = profile.or(cli.profile).unwrap_or_else(|| "tui".to_string());
             if native {
@@ -301,6 +330,7 @@ fn print_help() {
     println!("  rdsh auth --import              mirror codex/opencode OAuth into dsh credentials");
     println!("  rdsh setup                      first-run connect: import, login flow, next steps");
     println!("  rdsh search TODO --dir .        fast file search without Node");
+    println!("  rdsh search-web \"rust async\"      web search via SearXNG (no API key)");
     println!("  rdsh --passthrough tui          byte-identical delegation, no slim env");
     println!("  rdsh --dry-run tui -- --resume abc   show what would exec");
 }
