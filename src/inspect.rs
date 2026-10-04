@@ -3,7 +3,10 @@
 
 pub fn dsh_home() -> String {
     std::env::var("DSH_HOME").unwrap_or_else(|_| {
-        let h = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        // USERPROFILE is the Windows equivalent of HOME.
+        let h = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
         format!("{h}/.dsh")
     })
 }

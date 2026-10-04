@@ -3,6 +3,7 @@
 # rdsh — a fast, safe Rust launcher for `dsh`
 
 [![ci](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/sahenjp/rustdsh.svg)](https://github.com/sahenjp/rustdsh/releases)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.73%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -31,6 +32,7 @@ to Rust and delegates everything else to the original `dsh` binary** — so you 
 - [Project layout](#project-layout)
 - [Contributing](#contributing)
 - [FAQ](#faq)
+- [Credits](#credits)
 - [License](#license)
 
 ## Benchmarks
@@ -53,6 +55,20 @@ their outputs were diffed for equality.
 
 ## Install
 
+Fastest (prebuilt binary, no Rust needed):
+
+```sh
+# Linux / macOS / WSL
+curl -fsSL https://github.com/sahenjp/rustdsh/releases/latest/download/install.sh | bash -s -- --from-release
+```
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((Invoke-WebRequest -Uri https://github.com/sahenjp/rustdsh/releases/latest/download/install.ps1).Content)) -FromRelease
+```
+
+From source:
+
 ```sh
 git clone https://github.com/sahenjp/rustdsh.git
 cd rustdsh
@@ -61,6 +77,28 @@ cd rustdsh
 ./install.sh --restore       # undo the shadowing
 ./install.sh --prefix=DIR    # custom install dir (default ~/.local/bin)
 ```
+
+install.sh covers Linux, macOS, and WSL (auto-detects WSL, auto-installs
+Rust via rustup unless `--no-rustup`). Native Windows uses install.ps1:
+
+```powershell
+git clone https://github.com/sahenjp/rustdsh.git
+cd rustdsh
+.\install.ps1              # build + install to %LOCALAPPDATA%\rdsh\bin (+ user PATH)
+.\install.ps1 -AsDsh       # also shadow `dsh` (original kept as dsh-orig)
+.\install.ps1 -Restore     # undo the shadowing
+.\install.ps1 -Wsl         # also install inside WSL via install.sh
+```
+
+| OS | script | notes |
+|---|---|---|
+| Linux / macOS | `./install.sh` | needs `cargo` or `curl` (rustup auto-install) |
+| WSL | `./install.sh` inside the distro | detected automatically; alongside native via `install.ps1 -Wsl` |
+| Windows (native) | `.\install.ps1` | needs Rust (`winget install Rustlang.Rustup`); MSVC build tools required to compile |
+
+First boot with no model connected prints a pointer instead of leaving
+you at the DeepSeek prompt: run `rdsh setup` (or `rdsh setup --login` to
+start the Codex/opencode OAuth flow right away).
 
 Or build directly: `cargo build --release` produces `target/release/rdsh`.
 Requires Rust 1.73+ (uses `u32::div_ceil`, `thread::scope`); only three
@@ -91,6 +129,27 @@ rdsh doctor                          # check original dsh, DSH_HOME, slim setup
 rdsh bench --n 5                     # compare rdsh vs dsh startup
 rdsh serve                           # local web dashboard (:3080)
 ```
+
+### `rdsh auth`: OAuth auto-recognition (drop it in and it works)
+
+Logins you already did elsewhere are mirrored into
+`$DSH_HOME/.credentials.yaml`, the credential store dsh itself reads:
+
+- Codex CLI (`~/.codex/auth.json`, ChatGPT OAuth)
+- opencode (`$XDG_DATA_HOME/opencode/auth.json`, e.g. `openai` OAuth
+  becomes the `openai-codex` route)
+
+```sh
+rdsh auth            # status: what was found, what dsh already recognizes
+rdsh auth --import   # write missing/older grants (0600, other entries untouched)
+rdsh auth --json     # machine-readable status
+rdsh setup           # first-run wizard: import, DeepSeek-key paste, --login/--open
+```
+
+Booting (`rdsh tui`, `dump-config`, `plugin`) auto-syncs first, so logging
+in with Codex/opencode is enough. `RDSH_AUTH_AUTOSYNC=0` disables it.
+A dsh-side token that is newer is never overwritten, and non-grant
+records (API keys) are left alone.
 
 ### `rdsh guard`: a fast hook command for hooks.json
 
@@ -194,10 +253,11 @@ dumps, missing `--profile`) are reproduced in Rust.
 
 ### Verification (all executed)
 
-- `cargo test`: 15 unit tests pass (token math, wildcard matcher, arg splitter).
+- `cargo test`: 21 unit tests pass (token math, wildcard matcher, arg splitter, auth splice/freshness, setup lang).
   The suite caught and fixed one real matcher bug (single-pattern substring).
-- `tests/regress.sh`: 20 CLI checks pass (every subcommand, error paths, and
-  sandboxed `dsh`-name delegation against a fake original).
+- `tests/regress.sh`: 31 CLI checks pass (every subcommand, error paths,
+  auth import round-trip, setup first-run flow, and sandboxed `dsh`-name
+  delegation against a fake original).
 - Optimization diffs: old vs. new binary outputs compared byte-for-byte
   (300-hit search and truncated-max search both identical).
 - Live replacement verified on a real machine: `dsh --version` still delegates,
@@ -216,6 +276,7 @@ dumps, missing `--profile`) are reproduced in Rust.
 ## Project layout
 
 - `src/main.rs` — CLI definition, dispatch, `dsh`-name detection
+- `src/auth.rs` — OAuth auto-recognition (codex/opencode → credentials.yaml)
 - `src/dsh_args.rs` — original `lib/bin.js`-compatible arg splitter (read-only)
 - `src/passthrough.rs` — original-binary discovery + `exec` delegation
 - `src/slim.rs` — slim environment definition
@@ -226,19 +287,23 @@ dumps, missing `--profile`) are reproduced in Rust.
 - `src/guard.rs` — hooks.json guard command
 - `src/serve.rs` + `src/ui.html` — local web dashboard
 - `install.sh` — installer (`--as-dsh` shadow / `--restore`)
-- `tests/regress.sh` — CLI regression suite (20 checks)
+- `tests/regress.sh` — CLI regression suite (31 checks)
 
 ## Contributing
 
 ```sh
 cargo fmt --check      # must be clean
 cargo clippy --all-targets -- -D warnings   # must be clean
-cargo test             # 15 unit tests
-BIN=./target/debug/rdsh sh tests/regress.sh # 20 CLI checks (needs cargo build first)
+cargo test             # 21 unit tests
+BIN=./target/debug/rdsh sh tests/regress.sh # 31 CLI checks (needs cargo build first)
 ```
 
 No new dependencies without discussion: binary size and startup time are
 features. Behavior changes must extend `tests/regress.sh`.
+
+Release: `git tag vX.Y.Z && git push origin vX.Y.Z` builds per-OS binaries
+(Linux/macOS/Windows) and attaches them to the GitHub Release via the `cd`
+workflow.
 
 ## FAQ
 
@@ -248,6 +313,10 @@ features. Behavior changes must extend `tests/regress.sh`.
 - **Revert the replacement?** `./install.sh --restore` brings the original back.
 - **What does `~123tok?` mean?** Without the `zstd` CLI the estimate falls back
   to compressed-bytes/4; the `?` marks that.
+
+## Credits
+
+Ideas: [@studio_yebisu](https://x.com/studio_yebisu), [@remydre8](https://x.com/remydre8).
 
 ## License
 

@@ -1,0 +1,1294 @@
+// OAuth auto-recognition ("drop it in and it's recognized").
+//
+// Well-known external login stores are mirrored into
+// `$DSH_HOME/.credentials.yaml`, which is the only writable credential layer
+// dsh itself reads for OAuth grants:
+//
+//   ~/.codex/auth.json                  (Codex CLI: ChatGPT OAuth + optional key)
+//   $XDG_DATA_HOME/opencode/auth.json   (opencode logins, e.g. openai OAuth)
+//   ~/.local/share/opencode/auth.json   (same, default data dir)
+//
+// Safety rules (the file holds live secrets, dsh refreshes them in place):
+//   1. never delete or rename anything, only add/replace single entries
+//   2. never overwrite a record with an older grant (compare `expires`,
+//      fall back to source-file mtime vs credentials-file mtime)
+//   3. keep the file at 0600, otherwise dsh refuses to read it
+//   4. every other byte of the document is preserved (line surgery, no re-emit)
+
+use std::collections::HashMap;
+
+const RECORD_SCOPE: &str = "llm-pi-ai";
+
+fn home() -> Option<String> {
+    // Windows has no HOME; USERPROFILE (or HOMEDRIVE+HOMEPATH) is the equivalent.
+    for k in ["HOME", "USERPROFILE"] {
+        if let Ok(h) = std::env::var(k) {
+            if !h.is_empty() {
+                return Some(h);
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+            (Ok(d), Ok(p)) if !d.is_empty() && !p.is_empty() => return Some(format!("{d}{p}")),
+            _ => {}
+        }
+    }
+    None
+}
+
+pub fn creds_path() -> String {
+    format!("{}/.credentials.yaml", crate::inspect::dsh_home())
+}
+
+fn data_dir() -> Option<String> {
+    if let Ok(x) = std::env::var("XDG_DATA_HOME") {
+        if !x.is_empty() {
+            return Some(x);
+        }
+    }
+    // opencode on native Windows keeps auth under %APPDATA% (Roaming).
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(a) = std::env::var("APPDATA") {
+            if !a.is_empty() {
+                return Some(a);
+            }
+        }
+    }
+    home().map(|h| format!("{h}/.local/share"))
+}
+
+/// Where `opencode.json` (the OpenCode settings file) lives. Shown by
+/// `rdsh setup` so first-run users can find the settings screen.
+fn config_dir() -> Option<String> {
+    if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
+        if !x.is_empty() {
+            return Some(x);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(a) = std::env::var("APPDATA") {
+            if !a.is_empty() {
+                return Some(a);
+            }
+        }
+    }
+    home().map(|h| format!("{h}/.config"))
+}
+
+fn opencode_config_path() -> Option<String> {
+    config_dir().map(|c| format!("{c}/opencode/opencode.json"))
+}
+
+/// opencode's provider key -> dsh record id. Only `openai` needs renaming
+/// (dsh's route is `openai-codex`); everything else passes through verbatim
+/// when it fits the record-id grammar, otherwise it is skipped with a note.
+fn provider_id(opencode_key: &str) -> Option<String> {
+    if opencode_key == "openai" {
+        return Some("openai-codex".to_string());
+    }
+    if is_record_id(opencode_key) {
+        return Some(opencode_key.to_string());
+    }
+    None
+}
+
+fn is_record_id(s: &str) -> bool {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) if f.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    s.chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+}
+
+#[derive(Debug, Clone)]
+struct OauthGrant {
+    provider: String,
+    access: String,
+    refresh: String,
+    expires: Option<i64>,
+    account_id: Option<String>,
+    from: String,
+    src_mtime_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ApiKey {
+    name: String,
+    value: String,
+    from: String,
+}
+
+fn mtime_ms(p: &str) -> u64 {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn read_json(path: &str) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
+    v.get(key).and_then(|x| x.as_str()).map(|s| s.to_string())
+}
+
+fn num_field(v: &serde_json::Value, key: &str) -> Option<i64> {
+    v.get(key).and_then(|x| x.as_i64())
+}
+
+// --- JWT exp (best effort, no deps) ----------------------------------------
+
+fn b64url_val(c: u8) -> Option<u32> {
+    match c {
+        b'A'..=b'Z' => Some((c - b'A') as u32),
+        b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+        b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+        b'-' => Some(62),
+        b'_' => Some(63),
+        _ => None,
+    }
+}
+
+fn b64url_decode(s: &str) -> Option<Vec<u8>> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || bytes.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut n = 0;
+    for &c in bytes {
+        if c == b'=' {
+            break;
+        }
+        let v = b64url_val(c)?;
+        buf = (buf << 6) | v;
+        n += 1;
+        if n == 4 {
+            out.push((buf >> 16) as u8);
+            out.push((buf >> 8) as u8);
+            out.push(buf as u8);
+            buf = 0;
+            n = 0;
+        }
+    }
+    match n {
+        0 => {}
+        2 => {
+            out.push((buf >> 4) as u8);
+        }
+        3 => {
+            out.push((buf >> 10) as u8);
+            out.push((buf >> 2) as u8);
+        }
+        _ => return None,
+    }
+    Some(out)
+}
+
+/// Seconds-since-epoch `exp` claim of a JWT access token, in milliseconds.
+fn jwt_exp_ms(token: &str) -> Option<i64> {
+    let mut parts = token.split('.');
+    let payload = parts.nth(1)?;
+    let raw = b64url_decode(payload)?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    v.get("exp")?.as_i64().map(|s| s * 1000)
+}
+
+// --- external stores --------------------------------------------------------
+
+fn scan_codex(grants: &mut Vec<OauthGrant>, keys: &mut Vec<ApiKey>) {
+    let h = match home() {
+        Some(h) => h,
+        None => return,
+    };
+    let path = format!("{h}/.codex/auth.json");
+    let v = match read_json(&path) {
+        Some(v) => v,
+        None => return,
+    };
+    let mt = mtime_ms(&path);
+    if let Some(k) = v.get("OPENAI_API_KEY").and_then(|x| x.as_str()) {
+        if !k.is_empty() {
+            keys.push(ApiKey {
+                name: "OPENAI_API_KEY".to_string(),
+                value: k.to_string(),
+                from: "codex".to_string(),
+            });
+        }
+    }
+    if let Some(t) = v.get("tokens") {
+        let access = str_field(t, "access_token").unwrap_or_default();
+        let refresh = str_field(t, "refresh_token").unwrap_or_default();
+        if !access.is_empty() && !refresh.is_empty() {
+            grants.push(OauthGrant {
+                provider: "openai-codex".to_string(),
+                access: access.clone(),
+                refresh,
+                expires: jwt_exp_ms(&access),
+                account_id: str_field(t, "account_id"),
+                from: "codex".to_string(),
+                src_mtime_ms: mt,
+            });
+        }
+    }
+}
+
+fn scan_opencode(grants: &mut Vec<OauthGrant>, notes: &mut Vec<String>) {
+    let mut paths = Vec::new();
+    if let Some(d) = data_dir() {
+        paths.push(format!("{d}/opencode/auth.json"));
+    }
+    if let Some(h) = home() {
+        let alt = format!("{h}/.config/opencode/auth.json");
+        if !paths.contains(&alt) {
+            paths.push(alt);
+        }
+    }
+    for path in paths {
+        let v = match read_json(&path) {
+            Some(v) => v,
+            None => continue,
+        };
+        let obj = match v.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let mt = mtime_ms(&path);
+        for (key, entry) in obj {
+            let access = str_field(entry, "access").unwrap_or_default();
+            let refresh = str_field(entry, "refresh").unwrap_or_default();
+            if access.is_empty() || refresh.is_empty() {
+                continue;
+            }
+            match provider_id(key) {
+                Some(provider) => grants.push(OauthGrant {
+                    provider,
+                    access,
+                    refresh,
+                    expires: num_field(entry, "expires"),
+                    account_id: str_field(entry, "accountId"),
+                    from: "opencode".to_string(),
+                    src_mtime_ms: mt,
+                }),
+                None => notes.push(format!(
+                    "opencode login '{key}' skipped: not a dsh record id"
+                )),
+            }
+        }
+    }
+}
+
+// --- credentials.yaml (minimal line-preserving reader/writer) ---------------
+
+#[derive(Debug, Clone, Default)]
+struct StoredGrant {
+    kind: String,
+    access: Option<String>,
+    expires: Option<i64>,
+}
+
+#[derive(Debug, Default)]
+struct CredsDoc {
+    text: String,
+    version_ok: bool,
+    grants: HashMap<String, StoredGrant>,
+    refs: HashMap<String, String>,
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+fn unquote(s: &str) -> String {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('\'') && s.ends_with('\'') {
+        s[1..s.len() - 1].replace("''", "'")
+    } else {
+        s.to_string()
+    }
+}
+
+fn parse_num(s: &str) -> Option<i64> {
+    s.trim().parse::<i64>().ok()
+}
+
+fn flush_entry(
+    doc: &mut CredsDoc,
+    section: &str,
+    cur_key: &str,
+    cur_kind: &str,
+    cur_access: &Option<String>,
+    cur_expires: Option<i64>,
+) {
+    if section == "records" && !cur_key.is_empty() {
+        doc.grants.insert(
+            cur_key.to_string(),
+            StoredGrant {
+                kind: cur_kind.to_string(),
+                access: cur_access.clone(),
+                expires: cur_expires,
+            },
+        );
+    }
+}
+
+fn load_doc(path: &str) -> CredsDoc {
+    let mut doc = CredsDoc::default();
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return doc,
+    };
+    doc.text = text;
+    let lines: Vec<String> = doc.text.lines().map(|l| l.to_string()).collect();
+    let mut section = "";
+    let mut cur_key = String::new();
+    let mut cur_kind = String::new();
+    let mut cur_access: Option<String> = None;
+    let mut cur_expires: Option<i64> = None;
+    let mut in_payload = false;
+    for line in &lines {
+        let ind = indent_of(line);
+        let t: &str = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if ind == 0 {
+            flush_entry(
+                &mut doc,
+                section,
+                &cur_key,
+                &cur_kind,
+                &cur_access,
+                cur_expires,
+            );
+            cur_key.clear();
+            in_payload = false;
+            if t == "version: 1" {
+                doc.version_ok = true;
+            }
+            if t == "records:" || t == "refs:" {
+                section = if t == "records:" { "records" } else { "refs" };
+            } else {
+                section = "";
+            }
+            continue;
+        }
+        if section == "records" && ind == 2 && t.ends_with(':') {
+            flush_entry(
+                &mut doc,
+                section,
+                &cur_key,
+                &cur_kind,
+                &cur_access,
+                cur_expires,
+            );
+            cur_key = t[..t.len() - 1].to_string();
+            cur_kind.clear();
+            cur_access = None;
+            cur_expires = None;
+            in_payload = false;
+        } else if section == "refs" && ind == 2 {
+            if let Some(i) = t.find(':') {
+                let name = t[..i].trim().to_string();
+                let val = unquote(&t[i + 1..]);
+                if !name.is_empty() {
+                    doc.refs.insert(name, val);
+                }
+            }
+        } else if section == "records" && ind == 4 && !cur_key.is_empty() {
+            if let Some(rest) = t.strip_prefix("kind:") {
+                cur_kind = rest.trim().to_string();
+                in_payload = false;
+            } else {
+                in_payload = t == "payload:";
+            }
+        } else if section == "records" && ind >= 6 && in_payload && !cur_key.is_empty() {
+            if let Some(rest) = t.strip_prefix("access:") {
+                cur_access = Some(unquote(rest));
+            } else if let Some(rest) = t.strip_prefix("expires:") {
+                cur_expires = parse_num(rest);
+            }
+        }
+    }
+    flush_entry(
+        &mut doc,
+        section,
+        &cur_key,
+        &cur_kind,
+        &cur_access,
+        cur_expires,
+    );
+    if doc.text.trim().is_empty() {
+        doc.version_ok = true;
+    }
+    doc
+}
+
+fn quote(s: &str) -> String {
+    let plain_ok = !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-+/= ".contains(&b))
+        && !s.starts_with(' ')
+        && !s.ends_with(' ')
+        && !s.contains(": ")
+        && !s.contains(" #");
+    if plain_ok {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "''"))
+    }
+}
+
+fn grant_block(key: &str, g: &OauthGrant) -> Vec<String> {
+    let mut b = vec![
+        format!("  {key}:"),
+        "    kind: grant".to_string(),
+        "    payload:".to_string(),
+        format!("      access: {}", quote(&g.access)),
+        format!("      refresh: {}", quote(&g.refresh)),
+    ];
+    if let Some(e) = g.expires {
+        b.push(format!("      expires: {e}"));
+    }
+    if let Some(a) = &g.account_id {
+        if !a.is_empty() {
+            b.push(format!("      accountId: {}", quote(a)));
+        }
+    }
+    b.push("      type: oauth".to_string());
+    b
+}
+
+/// Replace-or-insert one 2-space entry inside a top-level section.
+fn splice_entry(text: &str, section: &str, key: &str, block: &[String]) -> Option<String> {
+    let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+    let sec_line = lines.iter().position(|l| *l == format!("{section}:"));
+    let sec_line = match sec_line {
+        Some(i) => i,
+        None => {
+            if section != "records" && section != "refs" {
+                return None;
+            }
+            if !lines.is_empty() && !lines.last().map(|l| l.is_empty()).unwrap_or(true) {
+                lines.push(String::new());
+            }
+            lines.push(format!("{section}:"));
+            lines.len() - 1
+        }
+    };
+    let entry_prefix = format!("  {key}:");
+    if let Some(pos) = lines
+        .iter()
+        .enumerate()
+        .skip(sec_line + 1)
+        .take_while(|(_, l)| indent_of(l) != 0 || l.trim().is_empty())
+        .find(|(_, l)| *l == &entry_prefix)
+        .map(|(i, _)| i)
+    {
+        let mut end = pos + 1;
+        while end < lines.len() {
+            let l = &lines[end];
+            if l.trim().is_empty() {
+                end += 1;
+                continue;
+            }
+            if indent_of(l) <= 2 {
+                break;
+            }
+            end += 1;
+        }
+        lines.splice(pos..end, block.iter().cloned());
+    } else {
+        let mut ins = sec_line + 1;
+        while ins < lines.len() {
+            let l = &lines[ins];
+            if !l.trim().is_empty() && indent_of(l) == 0 {
+                break;
+            }
+            ins += 1;
+        }
+        let mut at: Vec<String> = Vec::new();
+        if ins < lines.len() && !lines[..ins].last().map(|l| l.is_empty()).unwrap_or(true) {
+            at.push(String::new());
+        }
+        at.extend(block.iter().cloned());
+        lines.splice(ins..ins, at);
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    Some(out)
+}
+
+fn write_creds(path: &str, text: &str) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = format!("{path}.tmp.{}", std::process::id());
+    std::fs::write(&tmp, text)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+// --- decisions ----------------------------------------------------------------
+
+#[derive(Debug)]
+struct Decision {
+    provider: String,
+    from: String,
+    action: &'static str,
+    detail: String,
+    grant: Option<OauthGrant>,
+}
+
+fn fresher_than(source: &OauthGrant, stored: &StoredGrant, creds_mtime: u64) -> bool {
+    if stored.access.as_deref() == Some(source.access.as_str()) {
+        return false;
+    }
+    match (source.expires, stored.expires) {
+        (Some(s), Some(t)) => s > t,
+        _ => source.src_mtime_ms > creds_mtime && creds_mtime > 0,
+    }
+}
+
+fn plan() -> (
+    Vec<OauthGrant>,
+    Vec<ApiKey>,
+    Vec<String>,
+    CredsDoc,
+    Vec<Decision>,
+    String,
+) {
+    let mut grants: Vec<OauthGrant> = Vec::new();
+    let mut keys: Vec<ApiKey> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    scan_codex(&mut grants, &mut keys);
+    scan_opencode(&mut grants, &mut notes);
+    let path = creds_path();
+    let doc = load_doc(&path);
+    let creds_mtime = mtime_ms(&path);
+
+    let mut best: HashMap<String, OauthGrant> = HashMap::new();
+    for g in grants.clone() {
+        match best.get(&g.provider) {
+            Some(cur) => {
+                if g.expires.unwrap_or(0) > cur.expires.unwrap_or(0) {
+                    best.insert(g.provider.clone(), g);
+                }
+            }
+            None => {
+                best.insert(g.provider.clone(), g);
+            }
+        }
+    }
+    let mut providers: Vec<String> = best.keys().cloned().collect();
+    providers.sort();
+    let mut decisions = Vec::new();
+    for p in providers {
+        let g = best[&p].clone();
+        let key = format!("{RECORD_SCOPE}/{p}");
+        match doc.grants.get(&key) {
+            Some(stored) if stored.kind != "grant" => decisions.push(Decision {
+                provider: p,
+                from: g.from.clone(),
+                action: "ok",
+                detail: format!("record {key} is {}, left alone", stored.kind),
+                grant: None,
+            }),
+            None => decisions.push(Decision {
+                provider: p,
+                from: g.from.clone(),
+                action: "import",
+                detail: format!("no record {key}: would import from {}", g.from),
+                grant: Some(g),
+            }),
+            Some(stored) => {
+                if stored.access.as_deref() == Some(g.access.as_str()) {
+                    decisions.push(Decision {
+                        provider: p,
+                        from: g.from.clone(),
+                        action: "ok",
+                        detail: format!("record {key} already matches {}", g.from),
+                        grant: None,
+                    });
+                } else if fresher_than(&g, stored, creds_mtime) {
+                    decisions.push(Decision {
+                        provider: p,
+                        from: g.from.clone(),
+                        action: "refresh",
+                        detail: format!("record {key} is older: would refresh from {}", g.from),
+                        grant: Some(g),
+                    });
+                } else {
+                    decisions.push(Decision {
+                        provider: p,
+                        from: g.from.clone(),
+                        action: "ok",
+                        detail: format!(
+                            "record {key} kept: dsh-side token is newer than {}",
+                            g.from
+                        ),
+                        grant: None,
+                    });
+                }
+            }
+        }
+    }
+    (grants, keys, notes, doc, decisions, path)
+}
+
+fn autosync_enabled() -> bool {
+    std::env::var("RDSH_AUTH_AUTOSYNC").as_deref() != Ok("0")
+}
+
+/// Best-effort mirror before delegating to dsh (boot/dump/plugin/raw).
+/// Never fails: a broken store must not break launching.
+pub fn auto_sync() {
+    if !autosync_enabled() {
+        return;
+    }
+    let _ = apply_imports(true);
+}
+
+/// Import missing-or-older grants/refs. Quiet mode stays silent unless it
+/// actually writes (used by auto_sync before boot).
+fn apply_imports(quiet: bool) -> anyhow::Result<Vec<String>> {
+    let (_grants, keys, _notes, doc, decisions, path) = plan();
+    if !doc.text.is_empty() && !doc.version_ok {
+        if !quiet {
+            eprintln!("[rdsh auth] refuse: {path} uses the pre-release flat layout; add `version: 1` first");
+        }
+        return Ok(vec![]);
+    }
+    let mut text = if doc.text.is_empty() {
+        "version: 1\n".to_string()
+    } else {
+        doc.text.clone()
+    };
+    let mut done = Vec::new();
+    for d in decisions.iter().filter(|d| d.action != "ok") {
+        if let Some(g) = &d.grant {
+            let key = format!("{RECORD_SCOPE}/{}", d.provider);
+            match splice_entry(&text, "records", &key, &grant_block(&key, g)) {
+                Some(t) => {
+                    text = t;
+                    done.push(format!("{} {} from {}", d.action, key, g.from));
+                }
+                None => {
+                    if !quiet {
+                        eprintln!("[rdsh auth] skip {}: section error", key);
+                    }
+                }
+            }
+        }
+    }
+    for k in &keys {
+        if doc.refs.contains_key(&k.name) {
+            continue;
+        }
+        let block = vec![format!("  {}: {}", k.name, quote(&k.value))];
+        match splice_entry(&text, "refs", &k.name, &block) {
+            Some(t) => {
+                text = t;
+                done.push(format!("import ref {} from {}", k.name, k.from));
+            }
+            None => {
+                if !quiet {
+                    eprintln!("[rdsh auth] skip ref {}: section error", k.name);
+                }
+            }
+        }
+    }
+    if done.is_empty() {
+        return Ok(done);
+    }
+    write_creds(&path, &text)?;
+    for d in &done {
+        eprintln!("[rdsh auth] {d} -> {path}");
+    }
+    Ok(done)
+}
+
+pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
+    let (grants, keys, notes, doc, decisions, path) = plan();
+    let wrote = if import {
+        if !doc.text.is_empty() && !doc.version_ok {
+            anyhow::bail!(
+                "refuse: {path} uses the pre-release flat layout; add `version: 1` first"
+            );
+        }
+        apply_imports(false)?
+    } else {
+        vec![]
+    };
+    if json {
+        let h = home().unwrap_or_default();
+        let mut sources = Vec::new();
+        if grants.iter().any(|g| g.from == "codex") {
+            sources
+                .push(serde_json::json!({"name":"codex","path": format!("{h}/.codex/auth.json")}));
+        }
+        if grants.iter().any(|g| g.from == "opencode") {
+            let d = data_dir().unwrap_or_default();
+            sources.push(
+                serde_json::json!({"name":"opencode","path": format!("{d}/opencode/auth.json")}),
+            );
+        }
+        let recs: Vec<serde_json::Value> = decisions
+            .iter()
+            .map(|d| serde_json::json!({"provider": d.provider, "from": d.from, "action": d.action, "detail": d.detail}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({
+                "credentials": path,
+                "sources": sources,
+                "records": recs,
+                "refs_known": keys.iter().map(|k| &k.name).collect::<Vec<_>>(),
+                "notes": notes,
+                "wrote": wrote,
+            })
+        );
+        return Ok(());
+    }
+    println!("[rdsh auth] credentials: {path}");
+    if grants.is_empty() && keys.is_empty() {
+        println!("[rdsh auth] no external logins found (checked ~/.codex/auth.json, <data>/opencode/auth.json)");
+        println!("[rdsh auth] first time here? `rdsh setup` walks you through the connect");
+    }
+    for g in &grants {
+        let exp = g
+            .expires
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        println!(
+            "[rdsh auth] source {}: {} oauth (expires_ms={})",
+            g.from, g.provider, exp
+        );
+    }
+    for k in &keys {
+        let have = doc.refs.contains_key(&k.name);
+        println!(
+            "[rdsh auth] source {}: ref {} ({})",
+            k.from,
+            k.name,
+            if have {
+                "already stored"
+            } else {
+                "would import"
+            }
+        );
+    }
+    for d in &decisions {
+        println!("[rdsh auth] {}: {}", d.provider, d.detail);
+    }
+    for n in &notes {
+        println!("[rdsh auth] note: {n}");
+    }
+    if !doc.text.is_empty() && !doc.version_ok {
+        println!("[rdsh auth] refuse: pre-release flat layout; add `version: 1` first");
+    } else if import {
+        if wrote.is_empty() {
+            println!("[rdsh auth] nothing to write");
+        }
+    } else if decisions.iter().any(|d| d.action != "ok")
+        || keys.iter().any(|k| !doc.refs.contains_key(&k.name))
+    {
+        println!("[rdsh auth] hint: `rdsh auth --import` writes this (boot also auto-syncs; RDSH_AUTH_AUTOSYNC=0 disables)");
+    } else {
+        println!("[rdsh auth] everything already recognized");
+    }
+    Ok(())
+}
+
+/// One line for `rdsh doctor` (never fails).
+pub fn summary_line() -> String {
+    let (_grants, keys, _notes, doc, decisions, _path) = plan();
+    if decisions.is_empty() && keys.is_empty() {
+        return "no external logins found (codex/opencode)".to_string();
+    }
+    let mut parts: Vec<String> = decisions
+        .iter()
+        .map(|d| format!("{}={} [{}]", d.provider, d.action, d.from))
+        .collect();
+    for k in &keys {
+        parts.push(format!(
+            "{}={}",
+            k.name,
+            if doc.refs.contains_key(&k.name) {
+                "stored"
+            } else {
+                "pending-import"
+            }
+        ));
+    }
+    parts.sort();
+    parts.join(", ")
+}
+
+// --- first-run setup ----------------------------------------------------------
+//
+// dsh's default route asks for a DeepSeek connection on first boot, which
+// confuses newcomers (subscription OAuth via Codex/opencode needs no API key
+// at all, but nothing says so). `rdsh setup` plus the first-boot banner
+// below close that gap: detect, import, and otherwise show the exact next
+// step instead of a bare credential prompt.
+
+/// API-key env vars that count as "already connected".
+const KNOWN_ENV_KEYS: &[&str] = &["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"];
+
+fn user_lang() -> String {
+    for k in ["LANGUAGE", "LC_ALL", "LANG"] {
+        if let Ok(v) = std::env::var(k) {
+            if !v.trim().is_empty() {
+                return v;
+            }
+        }
+    }
+    String::new()
+}
+
+fn lang_is_japanese(lang: &str) -> bool {
+    let base = lang.split(['.', '@', ':']).next().unwrap_or("");
+    base.replace('-', "_").starts_with("ja")
+}
+
+fn is_japanese() -> bool {
+    lang_is_japanese(&user_lang())
+}
+
+fn env_key_set(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// True when no model credential is visible anywhere: no external OAuth
+/// logins, no known API-key env vars, and nothing stored yet. This is the
+/// "first boot demands a DeepSeek connection and I have no idea why" state.
+pub fn setup_needed() -> bool {
+    let (grants, keys, _notes, doc, _decisions, _path) = plan();
+    if !grants.is_empty() || !keys.is_empty() {
+        return false;
+    }
+    if !doc.grants.is_empty() || !doc.refs.is_empty() {
+        return false;
+    }
+    !KNOWN_ENV_KEYS.iter().any(|k| env_key_set(k))
+}
+
+/// Short first-boot banner printed to stderr before delegation (never fails,
+/// never blocks: the boot continues into dsh either way).
+pub fn first_boot_banner() {
+    if !setup_needed() {
+        return;
+    }
+    if is_japanese() {
+        eprintln!("[rdsh] モデル接続がまだありません（初回セットアップが必要です）");
+        eprintln!(
+            "[rdsh]   rdsh setup   … 対話ガイド：GPTサブスク(OAuth)かDeepSeekキーを接続します"
+        );
+        eprintln!("[rdsh]   サブスク利用ならAPIキーは不要です。詳しくは rdsh auth / rdsh doctor");
+    } else {
+        eprintln!("[rdsh] no model connection yet (first-run setup needed)");
+        eprintln!(
+            "[rdsh]   rdsh setup   … guided connect: GPT subscription (OAuth) or a DeepSeek key"
+        );
+        eprintln!("[rdsh]   subscriptions need no API key. See also rdsh auth / rdsh doctor");
+    }
+}
+
+fn prompt_line(prompt: &str) -> Option<String> {
+    use std::io::IsTerminal as _;
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    eprint!("{prompt}");
+    use std::io::Write as _;
+    let _ = std::io::stderr().flush();
+    let mut s = String::new();
+    if std::io::stdin().read_line(&mut s).is_err() {
+        return None;
+    }
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn prompt_yes(prompt: &str) -> bool {
+    match prompt_line(prompt) {
+        Some(s) => matches!(s.trim().to_lowercase().as_str(), "y" | "yes"),
+        None => false,
+    }
+}
+
+/// Store one `refs:` entry (0600, other entries untouched). Returns true
+/// when the file changed.
+fn store_ref(name: &str, value: &str) -> anyhow::Result<bool> {
+    let path = creds_path();
+    let doc = load_doc(&path);
+    if !doc.text.is_empty() && !doc.version_ok {
+        anyhow::bail!("refuse: {path} uses the pre-release flat layout");
+    }
+    if doc.refs.get(name).map(|v| v == value).unwrap_or(false) {
+        return Ok(false);
+    }
+    let mut text = if doc.text.is_empty() {
+        "version: 1\n".to_string()
+    } else {
+        doc.text.clone()
+    };
+    let block = vec![format!("  {}: {}", name, quote(value))];
+    match splice_entry(&text, "refs", name, &block) {
+        Some(t) => text = t,
+        None => anyhow::bail!("section error writing ref {name}"),
+    }
+    write_creds(&path, &text)?;
+    eprintln!("[rdsh setup] stored ref {name} -> {path}");
+    Ok(true)
+}
+
+fn which_bin(bin: &str) -> bool {
+    if bin.contains('/') || bin.contains('\\') {
+        return false;
+    }
+    std::env::var("PATH")
+        .map(|p| {
+            #[cfg(target_os = "windows")]
+            let sep = ';';
+            #[cfg(not(target_os = "windows"))]
+            let sep = ':';
+            p.split(sep).any(|d| {
+                let d = d.trim();
+                if d.is_empty() {
+                    return false;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    [".exe", ".cmd", ".bat", ""]
+                        .iter()
+                        .any(|e| std::fs::metadata(format!("{d}/{bin}{e}")).is_ok())
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    std::fs::metadata(format!("{d}/{bin}")).is_ok()
+                }
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Launch the provider's own login flow (`opencode auth login` prefers the
+/// subscription OAuth the complaint is about; `codex login` is the fallback).
+/// Returns true when a flow was started (it may still have been aborted).
+fn launch_login() -> bool {
+    let tool: Option<(&str, &[&str])> = [
+        ("opencode", &["auth", "login"] as &[&str]),
+        ("codex", &["login"] as &[&str]),
+    ]
+    .into_iter()
+    .find(|(bin, _)| which_bin(bin));
+    let (bin, args) = match tool {
+        Some(t) => t,
+        None => {
+            if is_japanese() {
+                eprintln!(
+                    "[rdsh setup] codexもopencodeも見つかりません。先にどちらかを導入してください"
+                );
+            } else {
+                eprintln!(
+                    "[rdsh setup] neither codex nor opencode found on PATH; install one first"
+                );
+            }
+            return false;
+        }
+    };
+    eprintln!(
+        "[rdsh setup] launching `{bin} {}` … finish the login there",
+        args.join(" ")
+    );
+    match std::process::Command::new(bin).args(args).status() {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("[rdsh setup] could not launch {bin}: {e:#}");
+            false
+        }
+    }
+}
+
+fn open_path(path: &str) -> anyhow::Result<()> {
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("explorer");
+        c.arg(path);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(path);
+        c
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(path);
+        c
+    };
+    let st = cmd
+        .status()
+        .map_err(|e| anyhow::anyhow!("spawning opener: {e}"))?;
+    if st.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("opener exited {st}")
+    }
+}
+
+/// `--open`: reveal the settings locations in the OS file manager (the
+/// "show me the settings screen" step for GUI-first users).
+fn open_settings_dirs(json: bool) {
+    let mut targets = vec![crate::inspect::dsh_home()];
+    if let Some(c) = config_dir() {
+        targets.push(format!("{c}/opencode"));
+    }
+    for t in targets {
+        match open_path(&t) {
+            Ok(_) if !json => println!("[rdsh setup] opened {t}"),
+            Ok(_) => {}
+            Err(e) => eprintln!("[rdsh setup] could not open {t}: {e:#}"),
+        }
+    }
+}
+
+fn print_guide() {
+    let creds = creds_path();
+    let cfg =
+        opencode_config_path().unwrap_or_else(|| "<config dir>/opencode/opencode.json".to_string());
+    if is_japanese() {
+        println!("[rdsh setup] まだ使えるモデルがありません。楽な順に3択です:");
+        println!("[rdsh setup]   1) サブスクで使う（APIキー不要・おすすめ）");
+        println!("[rdsh setup]      opencode auth login  … OpenAI(GPT)等を選んでOAuth接続");
+        println!("[rdsh setup]      codex login          … ChatGPTプランでGPTを使う場合");
+        println!("[rdsh setup]      終わったら次回起動で自動認識します（rdsh setup --login で今すぐ実行）");
+        println!("[rdsh setup]   2) DeepSeekキーを使う（dshが最初に求める接続がこれです）");
+        println!("[rdsh setup]      platform.deepseek.com で発行 → 上の入力欄に貼り付け");
+        println!("[rdsh setup]      または DEEPSEEK_API_KEY=... rdsh setup --yes で保存");
+        println!("[rdsh setup]   3) あとで：このまま起動するとdshがDeepSeek接続を求めます");
+        println!("[rdsh setup] 認証ファイル: {creds}");
+        println!("[rdsh setup] opencode設定: {cfg}");
+    } else {
+        println!("[rdsh setup] no usable model yet. Easiest first:");
+        println!("[rdsh setup]   1) Use a subscription (no API key needed, recommended)");
+        println!(
+            "[rdsh setup]      opencode auth login  … pick OpenAI (GPT) and connect via OAuth"
+        );
+        println!("[rdsh setup]      codex login          … for ChatGPT-plan GPT access");
+        println!(
+            "[rdsh setup]      next boot picks it up automatically (or rdsh setup --login now)"
+        );
+        println!("[rdsh setup]   2) Use a DeepSeek key (what dsh asks for by default)");
+        println!("[rdsh setup]      issue one at platform.deepseek.com, then paste it above");
+        println!("[rdsh setup]      or save it with DEEPSEEK_API_KEY=... rdsh setup --yes");
+        println!("[rdsh setup]   3) Later: booting as-is leads to the DeepSeek prompt");
+        println!("[rdsh setup] credentials file: {creds}");
+        println!("[rdsh setup] opencode settings: {cfg}");
+    }
+}
+
+/// First-run wizard: import what exists, persist env keys, optionally run
+/// the provider login flow or reveal settings dirs, otherwise print the
+/// exact next step. Safe non-interactive: prompts only fire on a TTY.
+pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool) -> anyhow::Result<()> {
+    let _ = apply_imports(json);
+    let mut persisted: Vec<String> = Vec::new();
+    for k in KNOWN_ENV_KEYS {
+        let v = match std::env::var(k) {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => continue,
+        };
+        if load_doc(&creds_path()).refs.contains_key(*k) {
+            continue;
+        }
+        let take = yes
+            || prompt_yes(&format!(
+                "[rdsh setup] save {k} from the environment into credentials? [y/N] "
+            ));
+        if take && store_ref(k, v.trim())? {
+            persisted.push(k.to_string());
+        }
+    }
+    {
+        use std::io::IsTerminal as _;
+        if !yes && std::io::stdin().is_terminal() && setup_needed() {
+            if let Some(pasted) = prompt_line(
+                "[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input is echoed): ",
+            ) {
+                match store_ref("DEEPSEEK_API_KEY", &pasted) {
+                    Ok(true) => persisted.push("DEEPSEEK_API_KEY".to_string()),
+                    Ok(false) => {}
+                    Err(e) => eprintln!("[rdsh setup] could not store key: {e:#}"),
+                }
+            }
+        }
+    }
+    let mut login_run = false;
+    if login {
+        login_run = launch_login();
+        let _ = apply_imports(json);
+    }
+    if open {
+        open_settings_dirs(json);
+    }
+    let needed = setup_needed();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "needed": needed,
+                "credentials": creds_path(),
+                "persisted_env_keys": persisted,
+                "login_run": login_run,
+                "opencode_config": opencode_config_path(),
+            })
+        );
+        return Ok(());
+    }
+    if !needed {
+        println!("[rdsh setup] connected: credentials are in place (see rdsh auth / rdsh doctor)");
+        return Ok(());
+    }
+    print_guide();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_id_grammar() {
+        assert!(is_record_id("openai-codex"));
+        assert!(is_record_id("a1"));
+        assert!(!is_record_id("OpenAI"));
+        assert!(!is_record_id("a.b"));
+        assert!(!is_record_id("1a"));
+        assert_eq!(provider_id("openai").as_deref(), Some("openai-codex"));
+        assert_eq!(provider_id("anthropic").as_deref(), Some("anthropic"));
+        assert!(provider_id("OpenAI").is_none());
+    }
+
+    #[test]
+    fn jwt_exp_decode() {
+        let tok = "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjE3OTE3MDg4MDJ9.sig";
+        assert_eq!(jwt_exp_ms(tok), Some(1791708802000));
+        assert!(jwt_exp_ms("not-a-jwt").is_none());
+    }
+
+    #[test]
+    fn splice_insert_and_replace() {
+        let base = "version: 1\nrecords:\n  llm-pi-ai/other:\n    kind: grant\n    payload:\n      access: x\nrefs:\n  A_B: '1'\n";
+        let g = OauthGrant {
+            provider: "openai-codex".to_string(),
+            access: "acc".to_string(),
+            refresh: "ref".to_string(),
+            expires: Some(5),
+            account_id: Some("id-1".to_string()),
+            from: "opencode".to_string(),
+            src_mtime_ms: 1,
+        };
+        let key = "llm-pi-ai/openai-codex";
+        let t1 = splice_entry(base, "records", key, &grant_block(key, &g)).unwrap();
+        assert!(t1.contains("  llm-pi-ai/openai-codex:\n"));
+        assert!(t1.contains("  llm-pi-ai/other:\n"));
+        assert!(t1.contains("refs:\n"));
+        let g2 = OauthGrant {
+            access: "acc2".to_string(),
+            ..g.clone()
+        };
+        let t2 = splice_entry(&t1, "records", key, &grant_block(key, &g2)).unwrap();
+        assert!(t2.contains("acc2"));
+        assert!(!t2.contains("      access: acc\n"));
+        assert!(t2.contains("  llm-pi-ai/other:\n"));
+    }
+
+    #[test]
+    fn splice_creates_sections() {
+        let g = OauthGrant {
+            provider: "openai-codex".to_string(),
+            access: "a".to_string(),
+            refresh: "r".to_string(),
+            expires: None,
+            account_id: None,
+            from: "codex".to_string(),
+            src_mtime_ms: 0,
+        };
+        let key = "llm-pi-ai/openai-codex";
+        let t = splice_entry("version: 1\n", "records", key, &grant_block(key, &g)).unwrap();
+        assert!(t.contains("records:\n"));
+        assert!(t.contains("type: oauth"));
+    }
+
+    #[test]
+    fn freshness_rules() {
+        let src = OauthGrant {
+            provider: "openai-codex".to_string(),
+            access: "new".to_string(),
+            refresh: "r".to_string(),
+            expires: Some(200),
+            account_id: None,
+            from: "opencode".to_string(),
+            src_mtime_ms: 10,
+        };
+        let same = StoredGrant {
+            kind: "grant".into(),
+            access: Some("new".into()),
+            expires: Some(100),
+        };
+        assert!(!fresher_than(&src, &same, 20));
+        let older = StoredGrant {
+            kind: "grant".into(),
+            access: Some("old".into()),
+            expires: Some(100),
+        };
+        assert!(fresher_than(&src, &older, 20));
+        let newer = StoredGrant {
+            kind: "grant".into(),
+            access: Some("dsh-refreshed".into()),
+            expires: Some(300),
+        };
+        assert!(!fresher_than(&src, &newer, 20));
+    }
+
+    #[test]
+    fn lang_detect() {
+        assert!(lang_is_japanese("ja_JP.UTF-8"));
+        assert!(lang_is_japanese("ja"));
+        assert!(!lang_is_japanese("en_US.UTF-8"));
+        assert!(!lang_is_japanese(""));
+        assert!(!lang_is_japanese("zh_CN.UTF-8"));
+    }
+}

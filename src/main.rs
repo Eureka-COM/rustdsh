@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+mod auth;
 mod compact;
 mod dsh_args;
 mod guard;
@@ -102,6 +103,26 @@ enum Commands {
         #[arg(long = "port", default_value_t = 3080)]
         port: u16,
     },
+    /// OAuth auto-recognition: external logins (codex/opencode) mirrored
+    /// into $DSH_HOME/.credentials.yaml ("drop in and recognized")
+    Auth {
+        #[arg(long = "import")]
+        import: bool,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// First-run connect: import what exists, persist env keys, optionally
+    /// run the provider login flow or reveal settings dirs, else show next step
+    Setup {
+        #[arg(long = "open")]
+        open: bool,
+        #[arg(long = "login")]
+        login: bool,
+        #[arg(long = "json")]
+        json: bool,
+        #[arg(long = "yes")]
+        yes: bool,
+    },
     Bench {
         #[arg(long = "n", default_value_t = 5)]
         n: u32,
@@ -137,6 +158,8 @@ const NATIVE_FIRST: &[&str] = &[
     "skills",
     "logs",
     "guard",
+    "auth",
+    "setup",
 ];
 
 fn invoked_as_dsh() -> bool {
@@ -144,7 +167,8 @@ fn invoked_as_dsh() -> bool {
     std::path::Path::new(&argv0)
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| s == "dsh")
+        // Native Windows installs run as dsh.exe.
+        .map(|s| s == "dsh" || s == "dsh.exe")
         .unwrap_or(false)
 }
 
@@ -187,6 +211,13 @@ fn main() {
         Some(Commands::Serve { port }) => serve::cmd_serve(port),
         Some(Commands::Bench { n }) => bench(n),
         Some(Commands::Guard { deny, reason, json }) => guard::cmd_guard(deny, reason, json),
+        Some(Commands::Auth { import, json }) => auth::cmd_auth(import, json),
+        Some(Commands::Setup {
+            open,
+            login,
+            json,
+            yes,
+        }) => auth::cmd_setup(open, login, json, yes),
         Some(Commands::DumpConfig { profile, native }) => {
             let p = profile.or(cli.profile).unwrap_or_else(|| "tui".to_string());
             if native {
@@ -267,6 +298,8 @@ fn print_help() {
     println!("  rdsh --profile web --patch x.yml boot web with overlay");
     println!("  rdsh dump-config --profile tui  delegate exact dump to dsh");
     println!("  rdsh tokens ./AGENTS.md         estimate input tokens natively");
+    println!("  rdsh auth --import              mirror codex/opencode OAuth into dsh credentials");
+    println!("  rdsh setup                      first-run connect: import, login flow, next steps");
     println!("  rdsh search TODO --dir .        fast file search without Node");
     println!("  rdsh --passthrough tui          byte-identical delegation, no slim env");
     println!("  rdsh --dry-run tui -- --resume abc   show what would exec");
@@ -322,6 +355,7 @@ fn doctor() -> anyhow::Result<()> {
         Err(e) => say(format!("[rdsh] profiles: (unreadable: {e})")),
     }
     say(format!("[rdsh] slim env: {}", slim::describe()));
+    say(format!("[rdsh] auth: {}", auth::summary_line()));
     if let Some(v) = original_version(orig.as_deref().unwrap_or("")) {
         say(format!("[rdsh] dsh version: {v}"));
     }

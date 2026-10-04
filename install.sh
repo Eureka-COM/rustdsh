@@ -1,22 +1,43 @@
 #!/usr/bin/env bash
 # rdsh installer: install as `rdsh`, optionally shadow `dsh` (with backup + restore).
 set -euo pipefail
+# Release-download scratch dir (set by fetch_release); cleaned at exit.
+FETCH_TMPD=""
+trap '[ -n "${FETCH_TMPD:-}" ] && rm -rf "$FETCH_TMPD"' EXIT
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 MODE="rdsh"
+NO_RUSTUP=0
+FROM_RELEASE=0
+VER="latest"
 for a in "$@"; do
   case "$a" in
     --as-dsh) MODE="as-dsh" ;;
     --restore) MODE="restore" ;;
     --prefix=*) PREFIX="${a#--prefix=}" ;;
+    --no-rustup) NO_RUSTUP=1 ;;
+    --from-release) FROM_RELEASE=1 ;;
+    --version=*) VER="${a#--version=}" ;;
     -h|--help)
-      echo "usage: ./install.sh [--as-dsh] [--restore] [--prefix=DIR]"
-      echo "  (default)  build + install rdsh to PREFIX/rdsh"
+      echo "usage: ./install.sh [--as-dsh] [--restore] [--prefix=DIR] [--no-rustup] [--from-release] [--version=VER]"
+      echo "  (default)  build + install rdsh to PREFIX/rdsh (Linux, macOS, WSL)"
       echo "  --as-dsh   also install rdsh as PREFIX/dsh (backs up original to PREFIX/dsh-orig)"
       echo "  --restore  restore PREFIX/dsh from PREFIX/dsh-orig"
+      echo "  --no-rustup  do not auto-install Rust when cargo is missing"
+      echo "  --from-release  install a prebuilt binary from GitHub Releases (no Rust needed)"
+      echo "  --version=VER  release to fetch with --from-release (default: latest)"
+      echo "  native Windows: use install.ps1 instead (it can also side-install into WSL via -Wsl)"
       exit 0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
 done
+OS="$(uname -s 2>/dev/null || echo unknown)"
+ARCH="$(uname -m 2>/dev/null || echo unknown)"
+echo "rdsh installer: $OS/$ARCH"
+if grep -qi microsoft /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}${WSL_INTEROP:-}" ]; then
+  echo "WSL detected (${WSL_DISTRO_NAME:-unknown distro}): installing inside this distro."
+  echo "From Windows, this install is reachable via File Explorer; for a native"
+  echo "Windows install (no WSL), run install.ps1 from PowerShell instead."
+fi
 if [ "$MODE" = restore ]; then
   if [ ! -e "$PREFIX/dsh-orig" ]; then echo "no backup at $PREFIX/dsh-orig" >&2; exit 1; fi
   if "$PREFIX/dsh" doctor 2>&1 | grep -q 'rdsh'; then
@@ -27,10 +48,40 @@ if [ "$MODE" = restore ]; then
   fi
   exit 0
 fi
-export PATH="$HOME/.cargo/bin:$PATH"
-cargo build --release
+fetch_release() {
+  # Print the path of the extracted prebuilt rdsh binary.
+  # Overridable for tests: RDSH_RELEASE_BASE=file:///path/to/dir.
+  base="${RDSH_RELEASE_BASE:-https://github.com/sahenjp/rustdsh/releases}"
+  case "$OS/$ARCH" in
+    Linux/x86_64) asset="rdsh-linux-x64.tar.gz" ;;
+    Darwin/arm64) asset="rdsh-macos-arm64.tar.gz" ;;
+    Darwin/x86_64) asset="rdsh-macos-x64.tar.gz" ;;
+    *) echo "no prebuilt binary for $OS/$ARCH (build from source instead)" >&2; exit 1 ;;
+  esac
+  if [ "$VER" = "latest" ]; then url="$base/latest/download/$asset"; else url="$base/download/$VER/$asset"; fi
+  FETCH_TMPD="$(mktemp -d)"
+  echo "fetching $url" >&2
+  curl -fsSL -o "$FETCH_TMPD/pkg.tgz" "$url"
+  tar -xzf "$FETCH_TMPD/pkg.tgz" -C "$FETCH_TMPD"
+  if [ ! -x "$FETCH_TMPD/rdsh" ]; then echo "release archive has no rdsh binary" >&2; exit 1; fi
+  echo "$FETCH_TMPD/rdsh"
+}
+BIN_SRC="target/release/rdsh"
+if [ "$FROM_RELEASE" = 1 ]; then
+  BIN_SRC="$(fetch_release)"
+else
+  export PATH="$HOME/.cargo/bin:$PATH"
+  if ! command -v cargo >/dev/null 2>&1; then
+    if [ "$NO_RUSTUP" = 1 ]; then echo "cargo not found (drop --no-rustup to auto-install Rust)" >&2; exit 1; fi
+    if ! command -v curl >/dev/null 2>&1; then echo "cargo not found and no curl to fetch rustup" >&2; exit 1; fi
+    echo "cargo not found: installing Rust via rustup (minimal profile)..."
+    curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+    export PATH="$HOME/.cargo/bin:$PATH"
+  fi
+  cargo build --release
+fi
 mkdir -p "$PREFIX" "$HOME/.config/rdsh"
-install -m755 target/release/rdsh "$PREFIX/rdsh"
+install -m755 "$BIN_SRC" "$PREFIX/rdsh"
 echo "installed $PREFIX/rdsh"
 if [ "$MODE" = as-dsh ]; then
   if [ -e "$PREFIX/dsh-orig" ]; then echo "backup exists: $PREFIX/dsh-orig (use --restore first)" >&2; exit 1; fi
@@ -53,3 +104,6 @@ if [ "$MODE" = as-dsh ]; then
     echo "note: exec dsh/rdsh directly instead of via node; 'rdsh doctor' lists the offenders."
   fi
 fi
+echo "--- rdsh doctor ---"
+"$PREFIX/rdsh" doctor 2>&1 | head -n 12 || true
+echo "next: run '$PREFIX/rdsh setup' to connect a model (GPT subscription via OAuth needs no API key)"

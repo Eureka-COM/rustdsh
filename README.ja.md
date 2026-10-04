@@ -23,6 +23,7 @@
 - [高速化の仕組み](#高速化の仕組み)
 - [構成](#構成)
 - [よくある質問](#よくある質問)
+- [クレジット](#クレジット)
 - [ライセンス](#ライセンス)
 
 ## 実測
@@ -43,6 +44,20 @@
 
 ## インストール
 
+いちばん速い方法（ビルド済みバイナリ、Rust不要）：
+
+```sh
+# Linux / macOS / WSL
+curl -fsSL https://github.com/sahenjp/rustdsh/releases/latest/download/install.sh | bash -s -- --from-release
+```
+
+```powershell
+# Windows（PowerShell）
+& ([scriptblock]::Create((Invoke-WebRequest -Uri https://github.com/sahenjp/rustdsh/releases/latest/download/install.ps1).Content)) -FromRelease
+```
+
+ソースから入れる場合：
+
 ```sh
 git clone https://github.com/sahenjp/rustdsh.git
 cd rustdsh
@@ -52,7 +67,29 @@ cd rustdsh
 ./install.sh --prefix=DIR    # 導入先を変更（既定 ~/.local/bin）
 ```
 
-ソースから直接建てる場合は `cargo build --release` で `target/release/rdsh` ができます。
+install.sh は Linux / macOS / WSL 用です（WSL自動検出、cargoがなければ
+rustupで自動導入。`--no-rustup` で無効化）。Windowsネイティブは install.ps1：
+
+```powershell
+git clone https://github.com/sahenjp/rustdsh.git
+cd rustdsh
+.\install.ps1              # ビルド＋ %LOCALAPPDATA%\rdsh\bin に導入（PATH追加つき）
+.\install.ps1 -AsDsh       # `dsh` 名でも使えるよう置換（元は dsh-orig に退避）
+.\install.ps1 -Restore     # 置換を元に戻す
+.\install.ps1 -Wsl         # WSL側にも install.sh で連動導入
+```
+
+| OS | スクリプト | 備考 |
+|---|---|---|
+| Linux / macOS | `./install.sh` | cargoかcurlが必要（rustup自動導入） |
+| WSL | ディストロ内で `./install.sh` | 自動検出。ネイティブ併用は `install.ps1 -Wsl` |
+| Windows（ネイティブ） | `.\install.ps1` | Rustが必要。コンパイルにMSVCビルドツールが必要 |
+
+モデル未接続の初回起動は、DeepSeekプロンプトに置き去りにせず案内を出します：
+`rdsh setup` を実行してください（`rdsh setup --login` ならCodex/opencodeの
+OAuthフローをその場で起動します）。
+
+ソースから直接ビルドする場合は `cargo build --release` で `target/release/rdsh` ができます。
 
 ## 使い方
 
@@ -79,6 +116,27 @@ rdsh doctor                        # 本家dsh・DSH_HOME・slim設定の確認
 rdsh bench --n 5                   # rdsh/dsh の起動比較
 rdsh serve                         # Webダッシュボード（:3080）
 ```
+
+### OAuth自動認識（`rdsh auth`：入れるだけで認識）
+
+他ツールで済ませたログインを、dsh本体が読む
+`$DSH_HOME/.credentials.yaml` へ自動で写します：
+
+- Codex CLI（`~/.codex/auth.json`、ChatGPT OAuth）
+- opencode（`$XDG_DATA_HOME/opencode/auth.json`、`openai` OAuthは
+  `openai-codex` ルートになります）
+
+```sh
+rdsh auth            # 状態確認：見つかったログインと認識済みの一覧
+rdsh auth --import   # 不足・古い分だけ書込（0600、他エントリ不変）
+rdsh auth --json     # 機械可読の状態出力
+rdsh setup           # 初回ウィザード：取込、キー貼付、--login/--open
+```
+
+起動時（`rdsh tui`・`dump-config`・`plugin`）は先に自動同期するので、
+Codex/opencode側でログインするだけで使えます。
+`RDSH_AUTH_AUTOSYNC=0` で無効化できます。dsh側で更新された新しい
+トークンは上書きせず、非grant記録（APIキー）にも触れません。
 
 ### hooks.json での使い方（`rdsh guard`）
 
@@ -121,13 +179,13 @@ rdsh plugin --profile web add /path/to/dsh-notify-push  # dsh plugin と同じ
 rdsh --profile web                             # slim env付きで起動（プラグインに影響なし）
 ```
 
-併用の注意点です。
+併用時の注意点：
 
 - ポート：dsh web GUIと`rdsh serve`は既定3080です。dsh webを3080のまま使い、
   `rdsh serve --port 38080` に分けます
 - 置換時：`install.sh --as-dsh`後はSmart-DSHの補助スクリプトがPATH上の`dsh`を
   Rust製と誤認します。`dsh-orig`を使うか`DSH_PACKAGE_DIR`を指定します
-- 版数：Smart-DSHはDSH `0.1.2-rc.1`基準です。`rdsh doctor`の版表示で差異を確認します
+- 対応バージョン：Smart-DSHはDSH `0.1.2-rc.1`基準です。`rdsh doctor`の版表示で差異を確認します
 
 ## Web UI（ダッシュボード）
 
@@ -147,7 +205,7 @@ rdsh serve
 | `GET /api/sessions?limit=20` | セッション一覧 |
 | `GET /api/skills` / `/api/profiles` | 一覧 |
 
-依存なし（std のみ＋埋め込み単一HTML、CDN不要・オフライン可）です。
+外部依存はありません（標準ライブラリのみ＋単一HTML埋め込み、CDN不要・オフライン可）です。
 
 ## 安全設計
 
@@ -159,8 +217,8 @@ rdsh serve
 
 ### 検証（すべて実行済み）
 
-- `cargo test`：15件通過（トークン計算・ワイルドカード・引数分割）
-- `tests/regress.sh`：20件通過（全サブコマンド・異常系・dsh名委譲の隔離検証）
+- `cargo test`：21件通過（トークン計算・ワイルドカード・引数分割・auth系）
+- `tests/regress.sh`：31件通過（全サブコマンド・異常系・auth取込往復・setup初回導線・dsh名委譲の隔離検証）
 - 高速化の前後で出力をdiff比較し、完全一致を確認（300件search・上限打ち切りsearch）
 - 実置換後に `dsh --version`（委譲）と `dsh guard`（新機能）を実機確認
 
@@ -175,6 +233,7 @@ rdsh serve
 ## 構成
 
 - `src/main.rs` — CLI定義・振り分け・`dsh`名検出
+- `src/auth.rs` — OAuth自動認識（codex/opencode→credentials.yaml）
 - `src/dsh_args.rs` — 本家 `lib/bin.js` 互換の引数分割（読取専用）
 - `src/passthrough.rs` — 本家探索＋`exec`委譲
 - `src/slim.rs` — slim env定義
@@ -185,7 +244,7 @@ rdsh serve
 - `src/guard.rs` — hooks.json用ガード
 - `src/serve.rs`＋`src/ui.html` — ローカルWeb UI
 - `install.sh` — 導入（`--as-dsh`置換／`--restore`復元）
-- `tests/regress.sh` — CLI回帰試験（20件）
+- `tests/regress.sh` — CLI回帰試験（31件）
 
 ## よくある質問
 
@@ -193,6 +252,11 @@ rdsh serve
 - **プロファイル名がサブコマンドと被る**：`dsh --profile <name>` 形式で起動してください
 - **元に戻したい**：`./install.sh --restore`（退避した本家を復元）
 - **`--tokens` の `?` 付き表示**：zstd CLIが無い環境では圧縮サイズからの概算である印です
+
+## クレジット
+
+アイディア： [@studio_yebisu](https://x.com/studio_yebisu)、
+[@remydre8](https://x.com/remydre8)。
 
 ## ライセンス
 

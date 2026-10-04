@@ -1,5 +1,3 @@
-use std::os::unix::process::CommandExt;
-
 /// Env overrides for drop-in `dsh` mode (see install.sh --as-dsh).
 /// RDSH_PASSTHROUGH=1 disables slim env; RDSH_DRY_RUN=1 only prints the exec.
 pub fn env_passthrough() -> bool {
@@ -11,7 +9,10 @@ pub fn env_dry() -> bool {
 }
 
 fn origin_file() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
+    // install.ps1 records the backup here on native Windows (USERPROFILE).
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
     let p = format!("{home}/.config/rdsh/origin");
     let s = std::fs::read_to_string(p).ok()?;
     let s = s.trim().to_string();
@@ -41,7 +42,8 @@ pub fn find_original_dsh() -> Option<String> {
     // Sibling backups created by install.sh --as-dsh (same dir as our binary).
     if let Some(exe) = &me {
         if let Some(dir) = exe.parent() {
-            for name in ["dsh-orig", "dsh.orig", "dsh.real"] {
+            // dsh-orig.exe covers native Windows installs (binary is dsh.exe there).
+            for name in ["dsh-orig", "dsh.orig", "dsh.real", "dsh-orig.exe"] {
                 let cand = dir.join(name);
                 if std::fs::metadata(&cand).is_ok() {
                     return Some(cand.to_string_lossy().into_owned());
@@ -50,17 +52,24 @@ pub fn find_original_dsh() -> Option<String> {
         }
     }
     if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
-            let cand = format!("{dir}/dsh");
-            if std::fs::metadata(&cand).is_ok() {
-                let mut skip = false;
-                if let (Some(m), Ok(c)) = (&me, std::fs::canonicalize(&cand)) {
-                    if let Ok(m) = std::fs::canonicalize(m) {
-                        skip = m == c;
+        // split_paths handles : on unix and ; on Windows.
+        for dir in std::env::split_paths(&path) {
+            #[cfg(target_os = "windows")]
+            let names = ["dsh.exe", "dsh"];
+            #[cfg(not(target_os = "windows"))]
+            let names = ["dsh"];
+            for n in names {
+                let cand = dir.join(n);
+                if std::fs::metadata(&cand).is_ok() {
+                    let mut skip = false;
+                    if let (Some(m), Ok(c)) = (&me, std::fs::canonicalize(&cand)) {
+                        if let Ok(m) = std::fs::canonicalize(m) {
+                            skip = m == c;
+                        }
                     }
-                }
-                if !skip {
-                    return Some(cand);
+                    if !skip {
+                        return Some(cand.to_string_lossy().into_owned());
+                    }
                 }
             }
         }
@@ -102,8 +111,21 @@ fn exec_or_spawn(mut cmd: std::process::Command, dry: bool) -> anyhow::Result<()
         println!("[rdsh dry-run] would exec: {cmd:?}");
         return Ok(());
     }
-    let err = cmd.exec();
-    Err(anyhow::anyhow!("exec failed: {err}"))
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        Err(anyhow::anyhow!("exec failed: {err}"))
+    }
+    #[cfg(not(unix))]
+    {
+        // No exec(3) on Windows: spawn, wait, and exit with the child status
+        // so callers/pipes observe the same code.
+        match cmd.status() {
+            Ok(st) => std::process::exit(st.code().unwrap_or(1)),
+            Err(e) => Err(anyhow::anyhow!("spawn failed: {e}")),
+        }
+    }
 }
 
 pub fn exec_boot(
@@ -114,6 +136,12 @@ pub fn exec_boot(
     dry: bool,
     slim: bool,
 ) -> anyhow::Result<()> {
+    if !dry {
+        crate::auth::auto_sync();
+        // First boot with no model credential: say the exact next step
+        // instead of letting dsh open with a bare DeepSeek prompt.
+        crate::auth::first_boot_banner();
+    }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig);
@@ -141,6 +169,9 @@ pub fn exec_dump_config(
     dry: bool,
     slim: bool,
 ) -> anyhow::Result<()> {
+    if !dry {
+        crate::auth::auto_sync();
+    }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig);
@@ -155,6 +186,12 @@ pub fn exec_dump_config(
 
 /// Raw verbatim delegation (used when invoked as `dsh`): no arg rewriting.
 pub fn exec_raw(args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
+    // Same first-boot guidance as exec_boot: `dsh` (shadowed) is the usual
+    // first thing a newcomer runs.
+    if !dry {
+        crate::auth::auto_sync();
+        crate::auth::first_boot_banner();
+    }
     let orig = find_original_dsh().ok_or_else(|| {
         anyhow::anyhow!("original dsh not found (set DSH_ORIG_BIN or reinstall with install.sh)")
     })?;
@@ -170,6 +207,9 @@ pub fn exec_plugin(
     dry: bool,
     slim: bool,
 ) -> anyhow::Result<()> {
+    if !dry {
+        crate::auth::auto_sync();
+    }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig);

@@ -2,8 +2,11 @@ name: ci
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
-  check:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,7 +15,42 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            regress: true
+          - os: macos-latest
+            regress: true
+          - os: windows-latest
+            regress: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
       - run: cargo build
-      - run: printf "#!/bin/sh\necho stub-dsh $@" > /tmp/stub-dsh && chmod +x /tmp/stub-dsh
-      - run: BIN=./target/debug/rdsh DSH_ORIG_BIN=/tmp/stub-dsh sh tests/regress.sh
+      - if: matrix.regress
+        shell: bash
+        run: |
+          printf '#!/bin/sh\necho stub-dsh $@' > /tmp/stub-dsh && chmod +x /tmp/stub-dsh
+          BIN=./target/debug/rdsh DSH_ORIG_BIN=/tmp/stub-dsh sh tests/regress.sh
+      - if: '! matrix.regress'
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP 'rdsh-smoke'
+          $h = Join-Path $tmp 'home'
+          $d = Join-Path $tmp 'dsh'
+          New-Item -ItemType Directory -Force -Path $h, $d | Out-Null
+          $env:HOME = $h
+          $env:DSH_HOME = $d
+          ./target/debug/rdsh.exe --version
+          $auth = ./target/debug/rdsh.exe auth --json | Out-String
+          if ($auth -notmatch 'records') { throw 'auth json missing records field' }
+          $setup = ./target/debug/rdsh.exe setup --json | Out-String
+          if ($setup -notmatch '"needed":true') { throw 'setup should report needed on first run' }
+          ./target/debug/rdsh.exe doctor
+

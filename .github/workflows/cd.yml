@@ -1,0 +1,54 @@
+name: cd
+
+# Release binaries on version tags: git tag vX.Y.Z && git push origin vX.Y.Z
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: rdsh
+            pkg: rdsh-linux-x64.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: rdsh
+            pkg: rdsh-macos-arm64.tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bin: rdsh
+            pkg: rdsh-macos-x64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: rdsh.exe
+            pkg: rdsh-windows-x64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - if: runner.os != 'Windows'
+        run: tar -czf ${{ matrix.pkg }} -C target/${{ matrix.target }}/release ${{ matrix.bin }}
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin }}" -DestinationPath ${{ matrix.pkg }}
+      # Ship the installers alongside the binaries so releases are one-liners:
+      #   curl -fsSL .../releases/latest/download/install.sh | bash -s -- --from-release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.pkg }}
+            install.sh
+            install.ps1
+          generate_release_notes: true
+
