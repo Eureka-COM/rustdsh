@@ -37,6 +37,8 @@ need_exit 2 "reject desktop" $BIN desktop
 need_exit 2 "reject double profile" $BIN --profile a --profile b
 need_exit 2 "reject dump with args" $BIN --profile tui --dump-config --foo
 need_exit 2 "reject plugin w/o args" $BIN plugin --profile tui
+need_grep "plugin" "plugin delegation dry-run" $BIN --dry-run plugin --profile web add ./dsh-notify-push
+need_grep "smart-dsh" "doctor reports smart-dsh" $BIN doctor
 python3 -c "print(5791 * 4)" | $BIN tokens > /dev/null
 printf "FROMSTDIN" > /tmp/rr-in.txt
 need_ok "compact noop" $BIN compact /tmp/rr-in.txt --max-tokens 8000

@@ -72,7 +72,7 @@ fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 /// metadata-check plus read_to_string combination (verified by diff).
 fn read_capped(path: &std::path::Path) -> Option<String> {
     use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
+    let f = std::fs::File::open(path).ok()?;
     let mut buf = Vec::new();
     f.take(2_000_001).read_to_end(&mut buf).ok()?;
     if buf.len() > 2_000_000 {

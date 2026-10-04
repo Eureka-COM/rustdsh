@@ -5,10 +5,10 @@
 <img src="assets/icon.svg" width="96" alt="rdsh icon">
 
 フル移植ではなく**ホットパスだけ Rust 化＋残りは本家 dsh に委譲**する設計です。
-起動約81倍・メモリ約1/20を、本家の動作を変えずに実現します。
+起動約98倍・メモリ約1/23を、本家の動作を変えずに実現します。
 
-- 起動中央値 **約1.19ミリ秒**（本家約96.7ミリ秒）
-- 常駐メモリ **約2.9MB**（本家約66MB）・単一バイナリ約799KB（依存ツリー不要）
+- 起動中央値 **約0.90ミリ秒**（本家約88ミリ秒）
+- 常駐メモリ **約2.9MB**（本家約66MB）・単一バイナリ約806KB（依存ツリー不要）
 - `dsh`名で置換しても引数を一字も変えず委譲するため、既存の使い方・スクリプトはそのまま動きます
 
 ## 目次
@@ -17,6 +17,7 @@
 - [インストール](#インストール)
 - [使い方](#使い方)
 - [置換モード（dsh として使う）](#置換モードdsh-として使う)
+- [Smart-DSH との併用](#smart-dsh-との併用)
 - [Web UI（ダッシュボード）](#web-uiダッシュボード)
 - [安全設計](#安全設計)
 - [高速化の仕組み](#高速化の仕組み)
@@ -30,13 +31,13 @@
 
 | 項目 | rdsh | 比較対象 | 倍率 |
 |---|---|---|---|
-| `--version` 起動（中央値、n=5） | 約1.19ms | 本家dsh 約96.7ms | 約81倍 |
+| `--version` 起動（中央値、n=5） | 約0.90ms | 本家dsh 約88ms | 約98倍 |
 | `--version` メモリ（最大RSS） | 約2.9MB | 本家 約66MB | 約1/23 |
 | フック相当処理のメモリ | 約2.7MB | node同等 約45MB | 約1/16 |
-| search（300ファイル・60万行） | 約12ms | 改修前 約41ms | 約3.4倍 |
+| search（300ファイル・60万行） | 約17ms | 改修前 約41ms | 約2.4倍 |
 | tokens（9.6MBテキスト） | 約12ms | 改修前 約35ms | 約2.9倍 |
 | sessions --tokens（20件展開） | 約0.41秒 | 改修前 約1.65秒 | 約4.0倍 |
-| 配布サイズ | 単一バイナリ約799KB | Nodeツリー約508MB | — |
+| 配布サイズ | 単一バイナリ約806KB | Nodeツリー約508MB | — |
 
 測定コマンドは `rdsh bench --n 5` と `/usr/bin/time -v` です。再現手順は[高速化の仕組み](#高速化の仕組み)にあります。
 
@@ -107,6 +108,26 @@ echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*token*"
 - 一時退避： `RDSH_PASSTHROUGH=1 dsh ...`（slim無し）、`RDSH_DRY_RUN=1 dsh ...`（実行内容のみ表示）
 - 注意： `dsh tokens` のようにプロファイル名が予約語と衝突する場合は `dsh --profile tokens` で起動してください
 
+## Smart-DSH との併用
+
+[Smart-DSH](https://github.com/hikarioyama/Smart-DSH)はDSHのwebプロファイル用プラグイン集
+（モバイルUI・Web Push通知・Esc停止）で、競合バイナリではありません。rdshと共存できます。
+
+```sh
+rdsh doctor                                    # dsh版＋Smart-DSHバンドルも表示
+rdsh --profile web --dump-config | grep notify-push   # 構成の読取確認
+rdsh plugin --profile web add /path/to/dsh-notify-push  # dsh plugin と同じ
+rdsh --profile web                             # slim env付きで起動（プラグインに影響なし）
+```
+
+併用の注意点です。
+
+- ポート：dsh web GUIと`rdsh serve`は既定3080です。dsh webを3080のまま使い、
+  `rdsh serve --port 38080` に分けます
+- 置換時：`install.sh --as-dsh`後はSmart-DSHの補助スクリプトがPATH上の`dsh`を
+  Rust製と誤認します。`dsh-orig`を使うか`DSH_PACKAGE_DIR`を指定します
+- 版数：Smart-DSHはDSH `0.1.2-rc.1`基準です。`rdsh doctor`の版表示で差異を確認します
+
 ## Web UI（ダッシュボード）
 
 ```sh
@@ -147,7 +168,7 @@ rdsh serve
 - トークン推定のASCII高速路：純ASCIIは `len/4` 一発計算（非ASCIIのみ従来走査、結果は同一）
 - searchの二段階化：逐次walkで順序固定→ファイル単位で並列grep→walk順に結合。32ファイル未満は従来の逐次路のままです
 - sessions --tokensの展開並列化：zstd展開をスレッド分散（数値は逐次と同一、順序保持）
-- ビルドは `opt-level=z`＋LTO＋strip＋`panic=abort` で小型維持（約799KB）
+- ビルドは `opt-level=z`＋LTO＋strip＋`panic=abort` で小型維持（約806KB）
 - 再現： `python3` で9.6MBテキスト・300ファイル合成木を作り、新旧バイナリを `time` 比較（旧版はgit worktreeでHEADビルド）
 
 ## 構成
