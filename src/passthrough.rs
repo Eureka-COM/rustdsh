@@ -24,9 +24,12 @@ fn origin_file() -> Option<String> {
 
 /// Locate the original Node-based dsh (never ourselves).
 pub fn find_original_dsh() -> Option<String> {
-    if let Ok(p) = std::env::var("DSH_ORIG_BIN") {
-        if !p.is_empty() {
-            return Some(p);
+    // Canonical name first, legacy DSH_ORIG_BIN kept as fallback.
+    for key in ["RDSH_ORIG_BIN", "DSH_ORIG_BIN"] {
+        if let Ok(p) = std::env::var(key) {
+            if !p.is_empty() {
+                return Some(p);
+            }
         }
     }
     if let Some(p) = origin_file() {

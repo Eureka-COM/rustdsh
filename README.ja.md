@@ -102,7 +102,8 @@ echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*token*"
 `dsh`名で呼ばれた場合の振る舞いです。
 
 - rdsh固有の先頭サブコマンド（`tokens`/`guard`/`serve`/`sessions`等）以外は、**引数を一字も変えず本家へexec委譲**します（`dsh --version`・`dsh --profile tui`・`dsh --help`は完全互換）
-- 本家の探索順： `DSH_ORIG_BIN` → `~/.config/rdsh/origin` → 退避ファイル（dsh-orig等）→ PATH（自分を除外）→ 既知npmパス
+- 本家の探索順： `RDSH_ORIG_BIN`（旧 `DSH_ORIG_BIN` も有効）→ `~/.config/rdsh/origin` → 退避ファイル（dsh-orig等）→ PATH（自分を除外）→ 既知npmパス
+- 命名は本家に準拠：コマンド・フラグはケバブケース（`dump-config`等）、`DSH_`環境変数名前空間は本家の所有とし、rdsh固有キーは `RDSH_` 配下に置きます
 - 一時退避： `RDSH_PASSTHROUGH=1 dsh ...`（slim無し）、`RDSH_DRY_RUN=1 dsh ...`（実行内容のみ表示）
 - 注意： `dsh tokens` のようにプロファイル名が予約語と衝突する場合は `dsh --profile tokens` で起動してください
 

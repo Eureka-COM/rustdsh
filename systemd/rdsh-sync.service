@@ -1,0 +1,6 @@
+[Unit]
+Description=rdsh dsh auto-update (check upstream, update, verify, roll back)
+
+[Service]
+Type=oneshot
+ExecStart=%h/File/Prog/rustdsh/sync-dsh.sh
