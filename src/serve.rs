@@ -6,7 +6,9 @@ const UI: &str = include_str!("ui.html");
 
 pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
     let addr = format!("127.0.0.1:{port}");
-    let listener = std::net::TcpListener::bind(&addr)?;
+    let listener = std::net::TcpListener::bind(&addr).map_err(|e| {
+        anyhow::anyhow!("cannot listen on {addr}: {e} (dsh web GUI also uses 3080; try --port 38080)")
+    })?;
     eprintln!("[rdsh] dashboard: http://{addr}/  (Ctrl-C to stop, localhost only)");
     for stream in listener.incoming() {
         match stream {

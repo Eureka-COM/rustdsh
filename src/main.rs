@@ -72,7 +72,7 @@ enum Commands {
     Doctor,
     /// Start the local dashboard (127.0.0.1 only, read-only API)
     Serve {
-        #[arg(long = "port", default_value_t = 8080)]
+        #[arg(long = "port", default_value_t = 3080)]
         port: u16,
     },
     Bench {
@@ -81,14 +81,44 @@ enum Commands {
     },
 }
 
+/// First-arg subcommands owned by rdsh. When installed as `dsh`, anything else
+/// is delegated verbatim to the original binary (so `dsh --profile tui`,
+/// `dsh --version`, `dsh --help` stay byte-identical).
+/// NOTE: a profile literally named like these (bare `dsh tokens`) is shadowed;
+/// boot it with `dsh --profile tokens` instead.
+const NATIVE_FIRST: &[&str] = &["boot", "dump-config", "tokens", "prune", "search", "compact", "doctor", "bench", "serve"];
+
+fn invoked_as_dsh() -> bool {
+    let argv0 = std::env::args().next().unwrap_or_default();
+    std::path::Path::new(&argv0)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s == "dsh")
+        .unwrap_or(false)
+}
+
 fn main() {
+    if invoked_as_dsh() {
+        let raw: Vec<String> = std::env::args().skip(1).collect();
+        let first_is_native = raw.first().map(|s| NATIVE_FIRST.contains(&s.as_str())).unwrap_or(false);
+        if !first_is_native {
+            let slim = !passthrough::env_passthrough();
+            let dry = passthrough::env_dry();
+            if let Err(e) = passthrough::exec_raw(&raw, dry, slim) {
+                eprintln!("[rdsh] error: {e:#}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        // else: fall through to the normal CLI (rdsh-native subcommand)
+    }
     let cli = Cli::parse();
     if cli.version_flag && cli.command.is_none() {
         println!("rdsh {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    let slim = cli.slim && !cli.no_slim && !cli.passthrough;
-    let dry = cli.dry_run;
+    let slim = cli.slim && !cli.no_slim && !cli.passthrough && !passthrough::env_passthrough();
+    let dry = cli.dry_run || passthrough::env_dry();
     let result: anyhow::Result<()> = match cli.command {
         Some(Commands::Tokens { files, preview }) => tokens::cmd_tokens(files, preview),
         Some(Commands::Prune { max_tokens, file }) => tokens::cmd_prune(max_tokens, file),
@@ -147,7 +177,7 @@ fn print_help() {
     println!();
     println!("USAGE:");
     println!("  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]");
-    println!("  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|dump-config|boot)");
+    println!("  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|dump-config|boot)");
     println!();
     println!("EXAMPLES:");
     println!("  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)");

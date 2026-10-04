@@ -6,8 +6,9 @@
 ## Web UI（ダッシュボード）
 
 ```sh
-rdsh serve --port 8080
-# → http://127.0.0.1:8080/ を開く（localhost のみ、読取専用API）
+rdsh serve
+# → http://127.0.0.1:3080/ を開く（localhost のみ、読取専用API）
+# ※ dsh web GUIと同ポートのため競合時は `rdsh serve --port 38080` 等を使う
 ```
 
 - 状態確認（doctor）、トークン推定、prune、起動ベンチをブラウザから実行
@@ -24,6 +25,21 @@ rdsh serve --port 8080
 | `tokens / prune / search / compact` をネイティブ化 | 初期入力トークン削減、Node fs-search 回避 |
 | slim env（`DSH_SLIM=1` 等、未知キーは本家が無視） | 重い任意バンドル（voice / auto-review）抑止のヒント |
 
+## dsh として使う（置換モード）
+
+```sh
+./install.sh --as-dsh   # ~/.local/bin/dsh を rdsh に置換（元は dsh-orig に退避+記録）
+dsh --version           # 本家にそのまま委譲（slim env 付き）
+dsh tui                 # 本家にそのまま委譲
+rdsh bench              # Rust側の高速機能もそのまま使える
+./install.sh --restore  # 元に戻す
+```
+
+- `dsh`名で呼ばれた場合、rdsh固有の先頭サブコマンド（tokens/prune/serve等）以外は**引数を一字も変えず本家へexec委譲**
+- 本家の探索順: `DSH_ORIG_BIN` → `~/.config/rdsh/origin` → 退避ファイル（dsh-orig等）→ PATH（自分を除外）→ 既知npmパス
+- 一時退避: `RDSH_PASSTHROUGH=1 dsh ...`（slim無し）、`RDSH_DRY_RUN=1 dsh ...`（実行内容のみ表示）
+- 注意: `dsh tokens` のようにプロファイル名がrdsh予約語と衝突する場合は `dsh --profile tokens` で起動する
+
 ## 使い方（dsh 互換）
 
 ```sh
@@ -32,7 +48,7 @@ rdsh --profile web --patch x.yml
 rdsh --passthrough tui           # slim 無しの完全委譲（非常口）
 rdsh --dry-run tui -- --resume abc  # 実行内容だけ表示
 
-rdsh serve --port 8080          # Webダッシュボード
+rdsh serve                    # Webダッシュボード（:3080）
 rdsh dump-config --profile tui --native  # Node なしで層一覧
 rdsh tokens ./AGENTS.md
 echo ... | rdsh prune --max-tokens 4000
@@ -67,3 +83,4 @@ cargo build --release  # target/release/rdsh
 - `src/search.rs` — std のみ再帰 grep
 - `src/compact.rs` — JSONL セッション圧縮
 - `src/serve.rs` + `src/ui.html` — ローカル Web UI（std のみ HTTP）
+- `install.sh` — インストーラ（`--as-dsh` 置換 / `--restore` 復元）
