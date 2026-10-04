@@ -15,7 +15,11 @@ fn origin_file() -> Option<String> {
     let p = format!("{home}/.config/rdsh/origin");
     let s = std::fs::read_to_string(p).ok()?;
     let s = s.trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Locate the original Node-based dsh (never ourselves).
@@ -104,8 +108,16 @@ fn exec_or_spawn(mut cmd: std::process::Command, dry: bool) -> anyhow::Result<()
     Err(anyhow::anyhow!("exec failed: {err}"))
 }
 
-pub fn exec_boot(profile: &str, from_default: Option<&str>, patches: &[String], app_args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
-    let orig = find_original_dsh().ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
+pub fn exec_boot(
+    profile: &str,
+    from_default: Option<&str>,
+    patches: &[String],
+    app_args: &[String],
+    dry: bool,
+    slim: bool,
+) -> anyhow::Result<()> {
+    let orig = find_original_dsh()
+        .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig);
     cmd.arg("--profile").arg(profile);
     if let Some(f) = from_default {
@@ -117,13 +129,22 @@ pub fn exec_boot(profile: &str, from_default: Option<&str>, patches: &[String], 
     cmd.args(app_args);
     apply_slim(&mut cmd, slim);
     if slim {
-        eprintln!("[rdsh] boot '{profile}' via {orig} (slim ON: {})", crate::slim::describe());
+        eprintln!(
+            "[rdsh] boot '{profile}' via {orig} (slim ON: {})",
+            crate::slim::describe()
+        );
     }
     exec_or_spawn(cmd, dry)
 }
 
-pub fn exec_dump_config(profile: &str, patches: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
-    let orig = find_original_dsh().ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
+pub fn exec_dump_config(
+    profile: &str,
+    patches: &[String],
+    dry: bool,
+    slim: bool,
+) -> anyhow::Result<()> {
+    let orig = find_original_dsh()
+        .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig);
     cmd.arg("--profile").arg(profile);
     for p in patches {
@@ -136,15 +157,23 @@ pub fn exec_dump_config(profile: &str, patches: &[String], dry: bool, slim: bool
 
 /// Raw verbatim delegation (used when invoked as `dsh`): no arg rewriting.
 pub fn exec_raw(args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
-    let orig = find_original_dsh().ok_or_else(|| anyhow::anyhow!("original dsh not found (set DSH_ORIG_BIN or reinstall with install.sh)"))?;
+    let orig = find_original_dsh().ok_or_else(|| {
+        anyhow::anyhow!("original dsh not found (set DSH_ORIG_BIN or reinstall with install.sh)")
+    })?;
     let mut cmd = base_cmd(&orig);
     cmd.args(args);
     apply_slim(&mut cmd, slim);
     exec_or_spawn(cmd, dry)
 }
 
-pub fn exec_plugin(profile: &str, pnpm_args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
-    let orig = find_original_dsh().ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
+pub fn exec_plugin(
+    profile: &str,
+    pnpm_args: &[String],
+    dry: bool,
+    slim: bool,
+) -> anyhow::Result<()> {
+    let orig = find_original_dsh()
+        .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig);
     cmd.arg("plugin").arg("--profile").arg(profile);
     cmd.args(pnpm_args);

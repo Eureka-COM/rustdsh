@@ -7,7 +7,9 @@ const UI: &str = include_str!("ui.html");
 pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
     let addr = format!("127.0.0.1:{port}");
     let listener = std::net::TcpListener::bind(&addr).map_err(|e| {
-        anyhow::anyhow!("cannot listen on {addr}: {e} (dsh web GUI also uses 3080; try --port 38080)")
+        anyhow::anyhow!(
+            "cannot listen on {addr}: {e} (dsh web GUI also uses 3080; try --port 38080)"
+        )
     })?;
     eprintln!("[rdsh] dashboard: http://{addr}/  (Ctrl-C to stop, localhost only)");
     for stream in listener.incoming() {
@@ -46,18 +48,36 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
     };
     let (status, ctype, payload): (u16, &str, String) = match (method, path) {
         ("GET", "/") => (200, "text/html; charset=utf-8", UI.to_string()),
-        ("GET", "/api/version") => (200, "application/json", serde_json::json!({"name": "rdsh", "version": env!("CARGO_PKG_VERSION")}).to_string()),
+        ("GET", "/api/version") => (
+            200,
+            "application/json",
+            serde_json::json!({"name": "rdsh", "version": env!("CARGO_PKG_VERSION")}).to_string(),
+        ),
         ("GET", "/api/doctor") => (200, "application/json", doctor_json()),
         ("POST", "/api/tokens") => {
             let text = serde_json::from_str::<serde_json::Value>(&body)
-                .ok().and_then(|v| v.get("text").and_then(|t| t.as_str()).map(|t| t.to_string()))
+                .ok()
+                .and_then(|v| {
+                    v.get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|t| t.to_string())
+                })
                 .unwrap_or_default();
             let t = crate::tokens::estimate_tokens(&text);
-            (200, "application/json", serde_json::json!({"tokens": t, "chars": text.len()}).to_string())
+            (
+                200,
+                "application/json",
+                serde_json::json!({"tokens": t, "chars": text.len()}).to_string(),
+            )
         }
         ("POST", "/api/prune") => {
-            let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-            let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+            let v: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+            let text = v
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
             let max = v.get("max_tokens").and_then(|m| m.as_u64()).unwrap_or(4000) as usize;
             let max = max.clamp(100, 200_000);
             let before = crate::tokens::estimate_tokens(&text);
@@ -80,9 +100,21 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
                 .clamp(1, 100);
             (200, "application/json", crate::inspect::sessions_json(n))
         }
-        ("GET", "/api/skills") => (200, "application/json", crate::inspect::names_json("skills")),
-        ("GET", "/api/profiles") => (200, "application/json", crate::inspect::names_json("profiles")),
-        _ => (404, "application/json", serde_json::json!({"error": "not found"}).to_string()),
+        ("GET", "/api/skills") => (
+            200,
+            "application/json",
+            crate::inspect::names_json("skills"),
+        ),
+        ("GET", "/api/profiles") => (
+            200,
+            "application/json",
+            crate::inspect::names_json("profiles"),
+        ),
+        _ => (
+            404,
+            "application/json",
+            serde_json::json!({"error": "not found"}).to_string(),
+        ),
     };
     let status_text = match status {
         200 => "OK",
@@ -102,7 +134,9 @@ fn doctor_json() -> String {
         let h = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         format!("{h}/.dsh")
     });
-    let profiles = std::fs::read_dir(format!("{home}/profiles")).map(|d| d.count()).unwrap_or(0);
+    let profiles = std::fs::read_dir(format!("{home}/profiles"))
+        .map(|d| d.count())
+        .unwrap_or(0);
     serde_json::json!({
         "original_dsh": orig,
         "dsh_home": home,
@@ -114,19 +148,27 @@ fn doctor_json() -> String {
 }
 
 fn bench_json(query: &str) -> String {
-    let n: u32 = query.split('&').find_map(|kv| {
-        let mut it = kv.splitn(2, '=');
-        match (it.next(), it.next()) {
-            (Some("n"), Some(v)) => v.parse().ok(),
-            _ => None,
-        }
-    }).unwrap_or(3).clamp(1, 5);
+    let n: u32 = query
+        .split('&')
+        .find_map(|kv| {
+            let mut it = kv.splitn(2, '=');
+            match (it.next(), it.next()) {
+                (Some("n"), Some(v)) => v.parse().ok(),
+                _ => None,
+            }
+        })
+        .unwrap_or(3)
+        .clamp(1, 5);
     let me = std::env::current_exe().ok();
     let mut mine = vec![];
     if let Some(exe) = me {
         for _ in 0..n {
             let t = std::time::Instant::now();
-            let ok = std::process::Command::new(&exe).arg("--version").status().map(|s| s.success()).unwrap_or(false);
+            let ok = std::process::Command::new(&exe)
+                .arg("--version")
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
             if !ok {
                 break;
             }

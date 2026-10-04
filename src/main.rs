@@ -2,15 +2,19 @@ use clap::{Parser, Subcommand};
 mod compact;
 mod dsh_args;
 mod guard;
-mod passthrough;
 mod inspect;
+mod passthrough;
 mod search;
 mod serve;
 mod slim;
 mod tokens;
 
 #[derive(Parser, Debug)]
-#[command(name = "rdsh", version, about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)")]
+#[command(
+    name = "rdsh",
+    version,
+    about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)"
+)]
 struct Cli {
     #[arg(short = 'V', long = "version")]
     version_flag: bool,
@@ -120,7 +124,22 @@ enum Commands {
 /// `dsh --version`, `dsh --help` stay byte-identical).
 /// NOTE: a profile literally named like these (bare `dsh tokens`) is shadowed;
 /// boot it with `dsh --profile tokens` instead.
-const NATIVE_FIRST: &[&str] = &["boot", "dump-config", "tokens", "prune", "search", "compact", "doctor", "bench", "serve", "sessions", "profiles", "skills", "logs", "guard"];
+const NATIVE_FIRST: &[&str] = &[
+    "boot",
+    "dump-config",
+    "tokens",
+    "prune",
+    "search",
+    "compact",
+    "doctor",
+    "bench",
+    "serve",
+    "sessions",
+    "profiles",
+    "skills",
+    "logs",
+    "guard",
+];
 
 fn invoked_as_dsh() -> bool {
     let argv0 = std::env::args().next().unwrap_or_default();
@@ -134,7 +153,10 @@ fn invoked_as_dsh() -> bool {
 fn main() {
     if invoked_as_dsh() {
         let raw: Vec<String> = std::env::args().skip(1).collect();
-        let first_is_native = raw.first().map(|s| NATIVE_FIRST.contains(&s.as_str())).unwrap_or(false);
+        let first_is_native = raw
+            .first()
+            .map(|s| NATIVE_FIRST.contains(&s.as_str()))
+            .unwrap_or(false);
         if !first_is_native {
             let slim = !passthrough::env_passthrough();
             let dry = passthrough::env_dry();
@@ -159,7 +181,11 @@ fn main() {
         Some(Commands::Search { pattern, dir, max }) => search::cmd_search(&pattern, &dir, max),
         Some(Commands::Compact { file, max_tokens }) => compact::cmd_compact(&file, max_tokens),
         Some(Commands::Doctor) => doctor(),
-        Some(Commands::Sessions { project, limit, tokens }) => inspect::cmd_sessions(project, limit, tokens),
+        Some(Commands::Sessions {
+            project,
+            limit,
+            tokens,
+        }) => inspect::cmd_sessions(project, limit, tokens),
         Some(Commands::Profiles) => inspect::cmd_profiles(),
         Some(Commands::Skills) => inspect::cmd_skills(),
         Some(Commands::Logs { tail, grep, file }) => inspect::cmd_logs(tail, grep, file),
@@ -174,9 +200,20 @@ fn main() {
                 passthrough::exec_dump_config(&p, &cli.patch, dry, slim)
             }
         }
-        Some(Commands::Boot { profile, from_default_profile, args }) => {
+        Some(Commands::Boot {
+            profile,
+            from_default_profile,
+            args,
+        }) => {
             let p = profile.or(cli.profile).unwrap_or_else(|| "tui".to_string());
-            passthrough::exec_boot(&p, from_default_profile.as_deref(), &cli.patch, &args, dry, slim)
+            passthrough::exec_boot(
+                &p,
+                from_default_profile.as_deref(),
+                &cli.patch,
+                &args,
+                dry,
+                slim,
+            )
         }
         None => {
             let parsed = dsh_args::split_launcher_args(cli.profile, cli.extra);
@@ -188,10 +225,22 @@ fn main() {
                 dsh_args::Launcher::Plugin { profile, pnpm_args } => {
                     passthrough::exec_plugin(&profile, &pnpm_args, dry, slim)
                 }
-                dsh_args::Launcher::Boot { profile, from_default, patches, app_args } => {
+                dsh_args::Launcher::Boot {
+                    profile,
+                    from_default,
+                    patches,
+                    app_args,
+                } => {
                     let mut all = cli.patch;
                     all.extend(patches);
-                    passthrough::exec_boot(&profile, from_default.as_deref(), &all, &app_args, dry, slim)
+                    passthrough::exec_boot(
+                        &profile,
+                        from_default.as_deref(),
+                        &all,
+                        &app_args,
+                        dry,
+                        slim,
+                    )
                 }
                 dsh_args::Launcher::Dump { profile, patches } => {
                     let mut all = cli.patch;
@@ -247,14 +296,19 @@ fn dump_config_native(profile: &str, patches: &[String]) -> anyhow::Result<()> {
                 println!("  - {n}");
             }
         }
-        Err(_) => println!("# no local profile dir at {root} (shipped template will be used by dsh)"),
+        Err(_) => {
+            println!("# no local profile dir at {root} (shipped template will be used by dsh)")
+        }
     }
     Ok(())
 }
 
 fn doctor() -> anyhow::Result<()> {
     let orig = passthrough::find_original_dsh();
-    println!("[rdsh] original dsh: {}", orig.as_deref().unwrap_or("<not found in PATH>"));
+    println!(
+        "[rdsh] original dsh: {}",
+        orig.as_deref().unwrap_or("<not found in PATH>")
+    );
     let home = std::env::var("DSH_HOME").unwrap_or_else(|_| {
         let h = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         format!("{h}/.dsh")
@@ -288,7 +342,9 @@ fn bench(n: u32) -> anyhow::Result<()> {
         let mut theirs = vec![];
         for _ in 0..n {
             let t = Instant::now();
-            let _ = std::process::Command::new(&orig).arg("--version").status()?;
+            let _ = std::process::Command::new(&orig)
+                .arg("--version")
+                .status()?;
             theirs.push(t.elapsed());
         }
         println!("[dsh ] dsh --version x{n}: {}", summarize(&theirs));

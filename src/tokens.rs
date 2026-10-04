@@ -3,6 +3,9 @@ use std::io::Read;
 /// Heuristic token estimator: ~4 chars/token for mixed text.
 /// CJK chars count ~1 token each. O(n), std-only.
 pub fn estimate_tokens(s: &str) -> usize {
+    if s.is_ascii() {
+        return s.len().div_ceil(4);
+    }
     let mut tokens = 0usize;
     let mut ascii_run = 0usize;
     for ch in s.chars() {
@@ -32,8 +35,19 @@ pub fn prune_to_budget(s: &str, max_tokens: usize) -> String {
     let head_chars = target_chars * 2 / 3;
     let tail_chars = target_chars - head_chars;
     let head: String = s.chars().take(head_chars).collect();
-    let tail: String = s.chars().rev().take(tail_chars).collect::<String>().chars().rev().collect();
-    format!("{head}\n\n...[rdsh pruned {}->{} tokens]...\n\n{tail}", estimate_tokens(s), max_tokens)
+    let tail: String = s
+        .chars()
+        .rev()
+        .take(tail_chars)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!(
+        "{head}\n\n...[rdsh pruned {}->{} tokens]...\n\n{tail}",
+        estimate_tokens(s),
+        max_tokens
+    )
 }
 
 fn read_stdin() -> anyhow::Result<String> {
@@ -45,7 +59,11 @@ fn read_stdin() -> anyhow::Result<String> {
 pub fn cmd_tokens(files: Vec<String>, preview: usize) -> anyhow::Result<()> {
     if files.is_empty() {
         let text = read_stdin()?;
-        println!("{{\"tokens\": {}, \"chars\": {}}}", estimate_tokens(&text), text.len());
+        println!(
+            "{{\"tokens\": {}, \"chars\": {}}}",
+            estimate_tokens(&text),
+            text.len()
+        );
         return Ok(());
     }
     let mut total = 0usize;
@@ -83,4 +101,40 @@ pub fn cmd_prune(max_tokens: usize, file: Option<String>) -> anyhow::Result<()> 
     eprintln!("[rdsh] tokens {before} -> {after} (budget {max_tokens})");
     println!("{pruned}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ascii_counts() {
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("a"), 1);
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcde"), 2);
+        assert_eq!(estimate_tokens("hello world, token test"), 6);
+    }
+
+    #[test]
+    fn non_ascii_counts() {
+        assert_eq!(estimate_tokens("a"), 1);
+        assert!(estimate_tokens("hello") > 0);
+        let mixed = "abcXdef";
+        assert_eq!(estimate_tokens(mixed), 2);
+    }
+
+    #[test]
+    fn prune_keeps_small() {
+        let s = "short text";
+        assert_eq!(prune_to_budget(s, 4000), s);
+    }
+
+    #[test]
+    fn prune_marks_big() {
+        let s: String = "x".repeat(20000);
+        let p = prune_to_budget(&s, 100);
+        assert!(p.contains("rdsh pruned"));
+        assert!(estimate_tokens(&p) <= 200);
+    }
 }

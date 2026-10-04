@@ -7,6 +7,9 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
         return true;
     }
     let parts: Vec<&str> = pattern.split("*").collect();
+    if parts.len() == 1 {
+        return text.contains(pattern);
+    }
     let mut rest = text;
     let mut first = true;
     for (i, part) in parts.iter().enumerate() {
@@ -81,7 +84,10 @@ pub fn cmd_guard(deny: Vec<String>, reason: Option<String>, json_out: bool) -> a
             let msg = reason.unwrap_or_else(|| "blocked by rdsh guard".to_string());
             eprintln!("[rdsh guard] pattern hit: {}", p);
             if json_out {
-                println!("{}", serde_json::json!({"decision": "block", "reason": msg}));
+                println!(
+                    "{}",
+                    serde_json::json!({"decision": "block", "reason": msg})
+                );
                 Ok(())
             } else {
                 eprintln!("{}", msg);
@@ -94,5 +100,39 @@ pub fn cmd_guard(deny: Vec<String>, reason: Option<String>, json_out: bool) -> a
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wild_basic() {
+        assert!(wildcard_match("*", "anything"));
+        assert!(wildcard_match("rm", "run rm now"));
+        assert!(!wildcard_match("zzz", "hello"));
+    }
+
+    #[test]
+    fn wild_anchors() {
+        assert!(wildcard_match("rm -rf /*", "rm -rf / x"));
+        assert!(!wildcard_match("rm -rf /*", "echo rm -rf / x"));
+        assert!(wildcard_match("a*", "abc"));
+        assert!(!wildcard_match("a*", "xbc"));
+        assert!(wildcard_match("*end", "the end"));
+    }
+
+    #[test]
+    fn wild_middle() {
+        assert!(wildcard_match("*evil*", "x evil y"));
+        assert!(wildcard_match("a*b", "axxb"));
+        assert!(!wildcard_match("a*b", "axxc"));
+    }
+
+    #[test]
+    fn collect_json_strings() {
+        let t = collect_text("plain text here");
+        assert_eq!(t, "plain text here");
     }
 }
