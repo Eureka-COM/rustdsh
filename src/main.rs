@@ -16,8 +16,6 @@ mod tokens;
     about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)"
 )]
 struct Cli {
-    #[arg(short = 'V', long = "version")]
-    version_flag: bool,
     #[arg(long = "passthrough", global = true)]
     passthrough: bool,
     #[arg(long = "dry-run", global = true)]
@@ -168,11 +166,8 @@ fn main() {
         }
         // else: fall through to the normal CLI (rdsh-native subcommand)
     }
+    // NOTE: --version/-V is served by clap itself (prints "rdsh x.y.z", exit 0).
     let cli = Cli::parse();
-    if cli.version_flag && cli.command.is_none() {
-        println!("rdsh {}", env!("CARGO_PKG_VERSION"));
-        return;
-    }
     let slim = cli.slim && !cli.no_slim && !cli.passthrough && !passthrough::env_passthrough();
     let dry = cli.dry_run || passthrough::env_dry();
     let result: anyhow::Result<()> = match cli.command {
