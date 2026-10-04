@@ -2,6 +2,8 @@
 
 [English](README.md)
 
+<img src="assets/icon.svg" width="96" alt="rdsh icon">
+
 フル移植ではなく**ホットパスだけ Rust 化＋残りは本家 dsh に委譲**する設計です。
 起動約81倍・メモリ約1/20を、本家の動作を変えずに実現します。
 

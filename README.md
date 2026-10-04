@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" width="96" alt="rdsh icon">
+
 # rdsh — a fast, safe Rust launcher for `dsh`
 
 [![ci](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml)

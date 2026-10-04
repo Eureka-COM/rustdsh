@@ -73,11 +73,6 @@ pub fn find_original_dsh() -> Option<String> {
             }
         }
     }
-    for cand in ["/home/sahen/.local/opt/node-v24.16.0-linux-x64/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"] {
-        if std::fs::metadata(cand).is_ok() {
-            return Some(cand.to_string());
-        }
-    }
     None
 }
 

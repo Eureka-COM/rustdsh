@@ -3,6 +3,7 @@
 //! no boot, no file writes, no command execution from HTTP.
 
 const UI: &str = include_str!("ui.html");
+const ICON: &str = include_str!("../assets/icon.svg");
 
 pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
     let addr = format!("127.0.0.1:{port}");
@@ -48,6 +49,7 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
     };
     let (status, ctype, payload): (u16, &str, String) = match (method, path) {
         ("GET", "/") => (200, "text/html; charset=utf-8", UI.to_string()),
+        ("GET", "/icon.svg") => (200, "image/svg+xml", ICON.to_string()),
         ("GET", "/api/version") => (
             200,
             "application/json",
