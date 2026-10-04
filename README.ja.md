@@ -209,6 +209,14 @@ rdsh serve
 
 外部依存はありません（標準ライブラリのみ＋単一HTML埋め込み、CDN不要・オフライン可）です。
 
+### プロジェクト専用ダッシュボードとスマホ接続
+
+追加の [Node.jsダッシュボード](dashboard/README.md) では、費用・タスク・質問と回答を
+プロジェクトごとに管理し、Tailscale経由のQRコードでスマホから開けます。
+`rdsh-dashboard project --project <ディレクトリ>` と、元のHarness Web画面を起動する
+`rdsh-dashboard harness` を分けて使います。ChatGPT Dots向けのMCP Eventsも備えています。
+Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots接続は上記ガイドを参照してください。
+
 ## 安全設計
 
 1. agent loop・profile bootの再実装はしません。`exec`委譲のみです

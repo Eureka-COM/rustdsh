@@ -244,6 +244,15 @@ rdsh serve
 Dependency-free (std-only HTTP server plus one embedded HTML file, no CDN,
 works offline).
 
+### Private project dashboards and phone access
+
+The optional [Node.js dashboard](dashboard/README.md) adds project metrics,
+tasks, human questions/replies, native MCP Events for ChatGPT Dots, and Tailscale
+QR access. `rdsh-dashboard project --project <directory>` opens a project-specific
+dashboard; `rdsh-dashboard harness` starts a separate original Harness Web UI.
+See the guide for installation, MCP client configuration, and private Dots
+connections through Secure MCP Tunnel. Requires Node.js 22+.
+
 ## Safety design
 
 1. The agent loop and profile boot are never reimplemented — delegation only.

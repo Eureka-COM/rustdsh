@@ -1,0 +1,83 @@
+import {
+  Server,
+  createMcpHandler,
+  ProtocolError,
+} from "@modelcontextprotocol/server";
+import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
+import { isLegacyRequest } from "@modelcontextprotocol/server";
+import * as z from "zod";
+import { tools, executeTool } from "./mcp.mjs";
+import { eventDefinitions } from "./webhooks.mjs";
+
+export function modernMcpHandler(api, hub) {
+  const handler = createMcpHandler(
+    () => {
+      const server = new Server(
+        { name: "rdsh-project-dashboard", version: "0.1.0" },
+        { capabilities: { tools: {}, events: {} } },
+      );
+      server.setRequestHandler("tools/list", async () => ({ tools }));
+      server.setRequestHandler("tools/call", async (request) => {
+        try {
+          const result = await executeTool(
+            api,
+            request.params.name,
+            request.params.arguments,
+          );
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        } catch (e) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: e.message }],
+          };
+        }
+      });
+      const params = z.object({}).passthrough().default({});
+      server.setRequestHandler("events/list", { params }, async () => ({
+        events: eventDefinitions,
+      }));
+      const eventParams = z
+        .object({
+          name: z.string(),
+          arguments: z.object({ project_id: z.string() }).strict(),
+          delivery: z.object({
+            mode: z.literal("webhook"),
+            url: z.url(),
+            secret: z.string().optional(),
+          }),
+          cursor: z.string().nullable().optional(),
+          ttlMs: z.number().int().positive().nullable().optional(),
+        })
+        .passthrough();
+      const eventCall = (method) => async (input) => {
+        try {
+          return await hub[method](input);
+        } catch (error) {
+          throw new ProtocolError(
+            error.code ?? -32602,
+            error.message,
+            error.data,
+          );
+        }
+      };
+      server.setRequestHandler(
+        "events/subscribe",
+        { params: eventParams },
+        eventCall("subscribe"),
+      );
+      server.setRequestHandler(
+        "events/unsubscribe",
+        { params: eventParams },
+        eventCall("unsubscribe"),
+      );
+      return server;
+    },
+    { legacy: "reject" },
+  );
+  const node = toNodeHandler(handler);
+  return {
+    handle: (req, res, body) => node(req, res, body),
+    isLegacy: async (req, body) =>
+      isLegacyRequest(await toWebRequest(req, body), body),
+  };
+}
