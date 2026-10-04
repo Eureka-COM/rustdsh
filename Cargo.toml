@@ -1,6 +1,6 @@
 [package]
 name = "rdsh"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Rust port/shim for dsh: fast launcher, token saver, zero behavior breakage via passthrough"
 license = "MIT"
