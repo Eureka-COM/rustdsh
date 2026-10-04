@@ -5,7 +5,8 @@ use crate::tokens::{estimate_tokens, prune_to_budget};
 pub fn cmd_compact(file: &str, max_tokens: usize) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(file)?;
     let lines: Vec<&str> = text.lines().collect();
-    let total: usize = lines.iter().map(|l| estimate_tokens(l)).sum();
+    let toks: Vec<usize> = lines.iter().map(|l| estimate_tokens(l)).collect();
+    let total: usize = toks.iter().sum();
     if total <= max_tokens {
         println!("{text}");
         eprintln!("[rdsh] no compaction needed ({total} <= {max_tokens} tokens)");
@@ -13,13 +14,12 @@ pub fn cmd_compact(file: &str, max_tokens: usize) -> anyhow::Result<()> {
     }
     let first = lines.first().copied().unwrap_or("");
     let mut kept: Vec<&str> = vec![];
-    let mut used = estimate_tokens(first) + 200;
-    for l in lines.iter().rev() {
-        let t = estimate_tokens(l);
-        if used + t > max_tokens {
+    let mut used = toks.first().copied().unwrap_or(0) + 200;
+    for (l, t) in lines.iter().zip(toks.iter()).rev() {
+        if used + *t > max_tokens {
             break;
         }
-        used += t;
+        used += *t;
         kept.push(l);
     }
     kept.reverse();

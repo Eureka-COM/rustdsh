@@ -115,25 +115,22 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
         },
     };
     let mut out: Vec<Session> = vec![];
-    for proj in projs {
-        let pdir = std::path::Path::new(&root).join(&proj);
-        let entries = match std::fs::read_dir(&pdir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for e in entries.filter_map(|e| e.ok()) {
-            if !e.path().is_dir() {
-                continue;
+    if projs.len() >= 2 {
+        std::thread::scope(|s| {
+            let mut handles = vec![];
+            for proj in &projs {
+                let pdir = std::path::Path::new(&root).join(proj);
+                let proj = proj.clone();
+                handles.push(s.spawn(move || scan_project(&pdir, &proj)));
             }
-            let id = e.file_name().to_string_lossy().into_owned();
-            let (bytes, mtime, mtime_s) = dir_size_mtime(&e.path());
-            out.push(Session {
-                project: proj.clone(),
-                id,
-                bytes,
-                mtime,
-                mtime_s,
-            });
+            for h in handles {
+                out.extend(h.join().unwrap_or_default());
+            }
+        });
+    } else {
+        for proj in &projs {
+            let pdir = std::path::Path::new(&root).join(proj);
+            out.extend(scan_project(&pdir, proj));
         }
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.mtime));
@@ -175,6 +172,29 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
     }
     eprintln!("[rdsh] {total} session(s), showing up to {limit}");
     Ok(())
+}
+
+fn scan_project(pdir: &std::path::Path, proj: &str) -> Vec<Session> {
+    let mut v = vec![];
+    let entries = match std::fs::read_dir(pdir) {
+        Ok(e) => e,
+        Err(_) => return v,
+    };
+    for e in entries.filter_map(|e| e.ok()) {
+        if !e.path().is_dir() {
+            continue;
+        }
+        let id = e.file_name().to_string_lossy().into_owned();
+        let (bytes, mtime, mtime_s) = dir_size_mtime(&e.path());
+        v.push(Session {
+            project: proj.to_string(),
+            id,
+            bytes,
+            mtime,
+            mtime_s,
+        });
+    }
+    v
 }
 
 fn dir_size_mtime(dir: &std::path::Path) -> (u64, u64, String) {
