@@ -297,9 +297,13 @@ pub fn cmd_logs(tail: usize, grep: Option<String>, file: Option<String>) -> anyh
     }
     let n = lines.len();
     let start = n.saturating_sub(tail);
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
     for l in &lines[start..] {
-        println!("{l}");
+        let _ = writeln!(out, "{l}");
     }
+    let _ = out.flush();
     eprintln!(
         "[rdsh] {} line(s){}",
         n,

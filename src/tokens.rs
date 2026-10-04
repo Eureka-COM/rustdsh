@@ -28,25 +28,30 @@ pub fn estimate_tokens(s: &str) -> usize {
 
 /// Keep head+tail within budget; middle replaced with marker.
 pub fn prune_to_budget(s: &str, max_tokens: usize) -> String {
-    if estimate_tokens(s) <= max_tokens {
+    let total = estimate_tokens(s);
+    if total <= max_tokens {
         return s.to_string();
     }
     let target_chars = max_tokens.saturating_mul(4).max(256);
     let head_chars = target_chars * 2 / 3;
     let tail_chars = target_chars - head_chars;
+    // Head: first head_chars chars. Tail: last tail_chars chars via one
+    // backward walk (no full second scan). Marker reuses the known total.
     let head: String = s.chars().take(head_chars).collect();
-    let tail: String = s
-        .chars()
-        .rev()
-        .take(tail_chars)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
+    let tail: String = if tail_chars == 0 {
+        String::new()
+    } else {
+        s.chars()
+            .rev()
+            .take(tail_chars)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    };
     format!(
         "{head}\n\n...[rdsh pruned {}->{} tokens]...\n\n{tail}",
-        estimate_tokens(s),
-        max_tokens
+        total, max_tokens
     )
 }
 

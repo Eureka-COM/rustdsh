@@ -11,6 +11,10 @@ pub fn cmd_search(pattern: &str, dir: &str, max: usize) -> anyhow::Result<()> {
     } else {
         files.iter().map(|p| grep_one(pattern, p)).collect()
     };
+    // One locked, buffered stdout for the whole dump (same bytes out).
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
     let mut shown = 0usize;
     let mut outer_done = false;
     for fh in &per_file {
@@ -22,10 +26,11 @@ pub fn cmd_search(pattern: &str, dir: &str, max: usize) -> anyhow::Result<()> {
                 outer_done = true;
                 break;
             }
-            println!("{line}");
+            let _ = writeln!(out, "{line}");
             shown += 1;
         }
     }
+    let _ = out.flush();
     eprintln!("[rdsh] {shown} hit(s) in {nfiles} file(s)");
     Ok(())
 }
