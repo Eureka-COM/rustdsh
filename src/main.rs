@@ -299,25 +299,113 @@ fn dump_config_native(profile: &str, patches: &[String]) -> anyhow::Result<()> {
 }
 
 fn doctor() -> anyhow::Result<()> {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    // `let _` on purpose: piping to `grep -q` / `head` closes early (EPIPE),
+    // which must not abort doctor with a panic.
+    let mut say = |s: String| {
+        let _ = writeln!(out, "{s}");
+    };
     let orig = passthrough::find_original_dsh();
-    println!(
+    say(format!(
         "[rdsh] original dsh: {}",
         orig.as_deref().unwrap_or("<not found in PATH>")
-    );
+    ));
     let home = std::env::var("DSH_HOME").unwrap_or_else(|_| {
         let h = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         format!("{h}/.dsh")
     });
-    println!("[rdsh] DSH_HOME: {home}");
+    say(format!("[rdsh] DSH_HOME: {home}"));
     match std::fs::read_dir(format!("{home}/profiles")) {
-        Ok(d) => println!("[rdsh] profiles: {} local profile(s)", d.count()),
-        Err(e) => println!("[rdsh] profiles: (unreadable: {e})"),
+        Ok(d) => say(format!("[rdsh] profiles: {} local profile(s)", d.count())),
+        Err(e) => say(format!("[rdsh] profiles: (unreadable: {e})")),
     }
-    println!("[rdsh] slim env: {}", slim::describe());
+    say(format!("[rdsh] slim env: {}", slim::describe()));
+    if let Some(v) = original_version(orig.as_deref().unwrap_or("")) {
+        say(format!("[rdsh] dsh version: {v}"));
+    }
+    say(format!("[rdsh] smart-dsh: {}", smart_dsh_status(&home)));
+    if shadowing_original() {
+        say(
+            "[rdsh] note: 'dsh' currently resolves to rdsh; Smart-DSH scripts that locate"
+                .to_string(),
+        );
+        say(
+            "[rdsh] note: DSH via PATH need the original: use `dsh-orig` or set DSH_PACKAGE_DIR"
+                .to_string(),
+        );
+    }
+    say("[rdsh] note: dsh web GUI and `rdsh serve` both default to 3080; co-use with".to_string());
+    say("[rdsh] note: `rdsh serve --port 38080` while dsh web keeps 3080".to_string());
     if orig.is_none() {
         anyhow::bail!("original 'dsh' not found; set DSH_ORIG_BIN or install @deepseek-ai/dsh");
     }
     Ok(())
+}
+
+/// Best-effort `dsh --version` readout for doctor (never fails the command).
+fn original_version(orig: &str) -> Option<String> {
+    if orig.is_empty() {
+        return None;
+    }
+    let out = if orig.ends_with(".js") {
+        std::process::Command::new("node")
+            .arg(orig)
+            .arg("--version")
+            .output()
+            .ok()?
+    } else {
+        std::process::Command::new(orig)
+            .arg("--version")
+            .output()
+            .ok()?
+    };
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Smart-DSH (https://github.com/hikarioyama/Smart-DSH) is a DSH web-profile
+/// plugin bundle, not a competing binary: report which of its bundles the web
+/// profile currently wires in (read-only package.json scan).
+fn smart_dsh_status(home: &str) -> String {
+    const KNOWN: &[&str] = &["dsh-notify-push", "dsh-esc-stop", "dsh-btw", "dsh-tasks"];
+    let pkg = format!("{home}/profiles/web/package.json");
+    let text = std::fs::read_to_string(&pkg).unwrap_or_default();
+    if text.is_empty() {
+        return "(not installed: no web profile package.json)".to_string();
+    }
+    let found: Vec<&str> = KNOWN.iter().copied().filter(|b| text.contains(b)).collect();
+    if found.is_empty() {
+        "(not installed in web profile)".to_string()
+    } else {
+        format!("bundles in web profile: {}", found.join(", "))
+    }
+}
+
+/// True when `dsh` on PATH resolves to this binary (install.sh --as-dsh state).
+fn shadowing_original() -> bool {
+    if invoked_as_dsh() {
+        return true;
+    }
+    let me = std::fs::canonicalize(std::env::current_exe().unwrap_or_default()).unwrap_or_default();
+    std::env::var("PATH")
+        .ok()
+        .map(|p| {
+            p.split(':').any(|dir| {
+                let cand = format!("{dir}/dsh");
+                std::fs::canonicalize(&cand)
+                    .map(|c| c == me)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn bench(n: u32) -> anyhow::Result<()> {

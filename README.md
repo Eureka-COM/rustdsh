@@ -11,10 +11,10 @@
 `rdsh` is a drop-in fast path for [dsh](https://github.com/deepseek-ai/deepseek-harness)
 (the DeepSeek Harness CLI). Instead of a full rewrite, it **ports only the hot paths
 to Rust and delegates everything else to the original `dsh` binary** — so you get
-~81x faster startup and ~1/20th the memory with zero behavior change.
+~98x faster startup and ~1/23rd the memory with zero behavior change.
 
-- Startup median **~1.19ms** (original `dsh`: ~96.7ms)
-- Resident memory **~2.9MB** (original: ~66MB), single ~799KB binary, no runtime tree
+- Startup median **~0.90ms** (original `dsh`: ~88ms)
+- Resident memory **~2.9MB** (original: ~66MB), single ~806KB binary, no runtime tree
 - Safe by construction: agent loop and profile boot are never reimplemented,
   delegation is a verbatim `exec`, and every optimization is output-identical
 
@@ -24,6 +24,7 @@ to Rust and delegates everything else to the original `dsh` binary** — so you 
 - [Install](#install)
 - [Usage](#usage)
 - [Replacement mode (run as `dsh`)](#replacement-mode-run-as-dsh)
+- [Using with Smart-DSH](#using-with-smart-dsh)
 - [Web dashboard](#web-dashboard)
 - [Safety design](#safety-design)
 - [How it got fast](#how-it-got-fast)
@@ -38,13 +39,13 @@ Measured on Linux x86_64, including before/after comparisons for the optimizatio
 
 | Case | rdsh | Baseline | Factor |
 |---|---|---|---|
-| `--version` startup (median, n=5) | ~1.19ms | original `dsh` ~96.7ms | ~81x |
+| `--version` startup (median, n=5) | ~0.90ms | original `dsh` ~88ms | ~98x |
 | `--version` peak RSS | ~2.9MB | original ~66MB | ~1/23 |
 | Hook-equivalent peak RSS | ~2.7MB | equivalent Node script ~45MB | ~1/16 |
-| search (300 files, ~600k lines) | ~12ms | before ~41ms | ~3.4x |
+| search (300 files, ~600k lines) | ~17ms | before ~41ms | ~2.4x |
 | tokens (9.6MB text) | ~12ms | before ~35ms | ~2.9x |
 | sessions --tokens (20 sessions) | ~0.41s | before ~1.65s | ~4.0x |
-| Distribution size | one ~799KB binary | ~508MB Node tree | — |
+| Distribution size | one ~806KB binary | ~508MB Node tree | — |
 
 Reproduce with `rdsh bench --n 5` and `/usr/bin/time -v`. The before/after
 binaries were built from HEAD vs. the working tree in a scratch worktree and
@@ -134,6 +135,30 @@ honored) → `~/.config/rdsh/origin` →
 - Name shadowing: a bare `dsh tokens` runs the rdsh subcommand; a profile
   literally named `tokens` still boots via `dsh --profile tokens`
 
+## Using with Smart-DSH
+
+[Smart-DSH](https://github.com/hikarioyama/Smart-DSH) is a DSH web-profile
+plugin bundle (mobile UI, Web Push notifications, Esc-to-stop), not a competing
+binary — it coexists with rdsh. rdsh passes its setup commands through:
+
+```sh
+rdsh doctor                                    # also shows dsh version + Smart-DSH bundles
+rdsh --profile web --dump-config | grep notify-push   # verify composition (read-only)
+rdsh plugin --profile web add /path/to/dsh-notify-push  # same as dsh plugin ...
+rdsh --profile web                             # boot web with slim env (plugins unaffected)
+```
+
+Co-use notes:
+
+- Ports: the dsh web GUI and `rdsh serve` both default to 3080. Keep 3080 for
+  dsh web (push/remote access) and run `rdsh serve --port 38080`.
+- `dsh`-shadowing: with `install.sh --as-dsh`, Smart-DSH helper scripts that
+  locate DSH via `dsh` on PATH resolve to the Rust binary and fail. Run those
+  scripts against the original (`dsh-orig ...`) or export `DSH_PACKAGE_DIR`
+  to the DSH package dir.
+- Versions: Smart-DSH documents DSH `0.1.2-rc.1`; `rdsh doctor` prints your
+  actual dsh version so mismatches are visible before installing bundles.
+
 ## Web dashboard
 
 ```sh
@@ -183,7 +208,7 @@ dumps, missing `--profile`) are reproduced in Rust.
   parallel, hits merge back in walk order. Trees under 32 files keep the exact
   old sequential code path.
 - Parallel zstd expansion for `sessions --tokens` (same numbers, order kept).
-- Release profile stays small: `opt-level=z`, LTO, `strip`, `panic=abort` (~799KB).
+- Release profile stays small: `opt-level=z`, LTO, `strip`, `panic=abort` (~806KB).
 
 ## Project layout
 
