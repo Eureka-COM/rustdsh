@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 mod compact;
 mod dsh_args;
 mod passthrough;
+mod inspect;
 mod search;
 mod serve;
 mod slim;
@@ -70,6 +71,29 @@ enum Commands {
         max_tokens: usize,
     },
     Doctor,
+    /// List sessions under $DSH_HOME (newest first, Node-free)
+    Sessions {
+        #[arg(long = "project")]
+        project: Option<String>,
+        #[arg(long = "limit", default_value_t = 20)]
+        limit: usize,
+        /// Estimate tokens via zstd decompression (falls back to stored-bytes/4)
+        #[arg(long = "tokens")]
+        tokens: bool,
+    },
+    /// List local profiles (Node-free)
+    Profiles,
+    /// List installed skills (Node-free)
+    Skills,
+    /// Show $DSH_HOME logs: latest file tail + optional grep (Node-free)
+    Logs {
+        #[arg(long = "tail", default_value_t = 50)]
+        tail: usize,
+        #[arg(long = "grep")]
+        grep: Option<String>,
+        #[arg(long = "file")]
+        file: Option<String>,
+    },
     /// Start the local dashboard (127.0.0.1 only, read-only API)
     Serve {
         #[arg(long = "port", default_value_t = 3080)]
@@ -86,7 +110,7 @@ enum Commands {
 /// `dsh --version`, `dsh --help` stay byte-identical).
 /// NOTE: a profile literally named like these (bare `dsh tokens`) is shadowed;
 /// boot it with `dsh --profile tokens` instead.
-const NATIVE_FIRST: &[&str] = &["boot", "dump-config", "tokens", "prune", "search", "compact", "doctor", "bench", "serve"];
+const NATIVE_FIRST: &[&str] = &["boot", "dump-config", "tokens", "prune", "search", "compact", "doctor", "bench", "serve", "sessions", "profiles", "skills", "logs"];
 
 fn invoked_as_dsh() -> bool {
     let argv0 = std::env::args().next().unwrap_or_default();
@@ -125,6 +149,10 @@ fn main() {
         Some(Commands::Search { pattern, dir, max }) => search::cmd_search(&pattern, &dir, max),
         Some(Commands::Compact { file, max_tokens }) => compact::cmd_compact(&file, max_tokens),
         Some(Commands::Doctor) => doctor(),
+        Some(Commands::Sessions { project, limit, tokens }) => inspect::cmd_sessions(project, limit, tokens),
+        Some(Commands::Profiles) => inspect::cmd_profiles(),
+        Some(Commands::Skills) => inspect::cmd_skills(),
+        Some(Commands::Logs { tail, grep, file }) => inspect::cmd_logs(tail, grep, file),
         Some(Commands::Serve { port }) => serve::cmd_serve(port),
         Some(Commands::Bench { n }) => bench(n),
         Some(Commands::DumpConfig { profile, native }) => {
@@ -177,7 +205,7 @@ fn print_help() {
     println!();
     println!("USAGE:");
     println!("  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]");
-    println!("  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|dump-config|boot)");
+    println!("  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|sessions|profiles|skills|logs|dump-config|boot)");
     println!();
     println!("EXAMPLES:");
     println!("  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)");

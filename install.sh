@@ -45,6 +45,7 @@ if [ "$MODE" = as-dsh ]; then
   else
     echo "no existing dsh in PREFIX; PATH lookup only"
   fi
-  cp -f "$PREFIX/rdsh" "$PREFIX/dsh"
-  echo "installed rdsh as $PREFIX/dsh (revert: ./install.sh --restore)"
+  tmp="$PREFIX/.dsh.new.$$"
+  install -m755 "$PREFIX/rdsh" "$tmp" && mv -f "$tmp" "$PREFIX/dsh"
+  echo "installed rdsh as $PREFIX/dsh (atomic replace; revert: ./install.sh --restore)"
 fi

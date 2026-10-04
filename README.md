@@ -54,6 +54,9 @@ rdsh tokens ./AGENTS.md
 echo ... | rdsh prune --max-tokens 4000
 rdsh search TODO --dir . --max 100
 rdsh compact ./session.jsonl --max-tokens 8000
+rdsh sessions --limit 20 --tokens   # セッション一覧＋トークン見積（Nodeなし）
+rdsh logs --tail 50 --grep ERROR    # 起動ログ参照（Nodeなし）
+rdsh profiles / rdsh skills         # 一覧（Nodeなし）
 rdsh doctor
 rdsh bench --n 5
 ```
@@ -83,4 +86,5 @@ cargo build --release  # target/release/rdsh
 - `src/search.rs` — std のみ再帰 grep
 - `src/compact.rs` — JSONL セッション圧縮
 - `src/serve.rs` + `src/ui.html` — ローカル Web UI（std のみ HTTP）
+- `src/inspect.rs` — sessions/logs/skills/profiles の読取専用参照（Nodeなし）
 - `install.sh` — インストーラ（`--as-dsh` 置換 / `--restore` 復元）
