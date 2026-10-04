@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rdsh dashboard</title>
+<style>
+:root { color-scheme: dark; --bg: #0d1117; --card: #161b22; --line: #30363d; --fg: #e6edf3; --mut: #8b949e; --acc: #58a6ff; --ok: #3fb950; --warn: #d29922; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, "Hiragino Sans", sans-serif; }
+header { padding: 20px 24px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: baseline; }
+header h1 { margin: 0; font-size: 20px; }
+header span { color: var(--mut); font-size: 12px; }
+main { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; padding: 20px 24px; max-width: 1100px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.card h2 { margin: 0 0 8px; font-size: 15px; }
+.card p { color: var(--mut); font-size: 12px; margin: 0 0 10px; }
+textarea, input[type=number] { width: 100%; background: #0d1117; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 13px monospace; }
+textarea { min-height: 110px; resize: vertical; }
+button { background: #238636; color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; margin-top: 8px; }
+button:hover { background: #2ea043; }
+button.ghost { background: transparent; border: 1px solid var(--line); color: var(--fg); }
+pre { background: #0d1117; border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow: auto; max-height: 220px; font-size: 12px; white-space: pre-wrap; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px; }
+.ok { background: rgba(63,185,80,.15); color: var(--ok); }
+.row { display: flex; gap: 8px; align-items: center; }
+.row label { color: var(--mut); font-size: 12px; white-space: nowrap; }
+.row input { width: 90px; }
+footer { padding: 0 24px 24px; color: var(--mut); font-size: 12px; }
+</style>
+</head>
+<body>
+<header><h1>rdsh dashboard</h1><span id="ver">…</span></header>
+<main>
+<section class="card"><h2>状態 (doctor)</h2><p>本家dsh・DSH_HOME・slim設定を確認</p>
+<button class="ghost" onclick="doctor()">更新</button><pre id="doctor">未取得</pre></section>
+<section class="card"><h2>トークン推定</h2><p>初期入力トークンの見積もり（約4文字=1トークン）</p>
+<textarea id="ttext" placeholder="ここにテキストを貼り付け"></textarea>
+<button onclick="tokens()">推定する</button><pre id="tout">-</pre></section>
+<section class="card"><h2>prune（切り詰め）</h2><p>head+tailを残して予算内に収める</p>
+<textarea id="ptext" placeholder="長いツール出力を貼り付け"></textarea>
+<div class="row"><label>予算</label><input id="pmax" type="number" value="4000" min="100"></div>
+<button onclick="prune()">prune実行</button><pre id="pout">-</pre></section>
+<section class="card"><h2>ベンチ</h2><p>rdsh vs dsh の起動速度を比較</p>
+<button class="ghost" onclick="bench()">計測 (n=3)</button><pre id="bench">未計測</pre></section>
+</main>
+<footer>rdsh は本家dshを壊さない安全なRustランチャーです。serveは127.0.0.1のみで待ち受けます。</footer>
+<script>
+async function jget(p){ const r = await fetch(p); return r.json(); }
+async function jpost(p, b){ const r = await fetch(p, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(b)}); return r.json(); }
+(async () => { try { const v = await jget("/api/version"); document.getElementById("ver").textContent = v.name + " " + v.version; } catch(e){} })();
+async function doctor(){ const d = await jget("/api/doctor"); document.getElementById("doctor").textContent = JSON.stringify(d, null, 2); }
+async function tokens(){ const t = document.getElementById("ttext").value; const r = await jpost("/api/tokens", {text: t}); document.getElementById("tout").textContent = "tokens: " + r.tokens + " / chars: " + r.chars; }
+async function prune(){ const t = document.getElementById("ptext").value; const m = +document.getElementById("pmax").value || 4000; const r = await jpost("/api/prune", {text: t, max_tokens: m}); document.getElementById("pout").textContent = "[before " + r.before + " -> after " + r.after + "]\n" + r.pruned.slice(0, 2000); }
+async function bench(){ document.getElementById("bench").textContent = "計測中…"; const r = await jget("/api/bench?n=3"); document.getElementById("bench").textContent = JSON.stringify(r, null, 2); }
+doctor();
+</script>
+</body>
+</html>

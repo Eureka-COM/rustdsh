@@ -1,0 +1,99 @@
+use std::os::unix::process::CommandExt;
+
+/// Locate the original Node-based dsh (never ourselves).
+pub fn find_original_dsh() -> Option<String> {
+    if let Ok(p) = std::env::var("DSH_ORIG_BIN") {
+        if !p.is_empty() {
+            return Some(p);
+        }
+    }
+    let me = std::env::current_exe().ok();
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(':') {
+            let cand = format!("{dir}/dsh");
+            if std::fs::metadata(&cand).is_ok() {
+                let mut skip = false;
+                if let (Some(m), Ok(c)) = (&me, std::fs::canonicalize(&cand)) {
+                    if let Ok(m) = std::fs::canonicalize(m) {
+                        skip = m == c;
+                    }
+                }
+                if !skip {
+                    return Some(cand);
+                }
+            }
+        }
+    }
+    for cand in ["/home/sahen/.local/opt/node-v24.16.0-linux-x64/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"] {
+        if std::fs::metadata(cand).is_ok() {
+            return Some(cand.to_string());
+        }
+    }
+    None
+}
+
+fn base_cmd(orig: &str) -> std::process::Command {
+    if orig.ends_with(".js") {
+        let mut c = std::process::Command::new("node");
+        c.arg(orig);
+        c
+    } else {
+        std::process::Command::new(orig)
+    }
+}
+
+fn apply_slim(cmd: &mut std::process::Command, slim: bool) {
+    if slim {
+        for (k, v) in crate::slim::slim_env() {
+            cmd.env(k, v);
+        }
+    }
+}
+
+fn exec_or_spawn(mut cmd: std::process::Command, dry: bool) -> anyhow::Result<()> {
+    if dry {
+        println!("[rdsh dry-run] would exec: {cmd:?}");
+        return Ok(());
+    }
+    let err = cmd.exec();
+    Err(anyhow::anyhow!("exec failed: {err}"))
+}
+
+pub fn exec_boot(profile: &str, from_default: Option<&str>, patches: &[String], app_args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
+    let orig = find_original_dsh().ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
+    let mut cmd = base_cmd(&orig);
+    cmd.arg("--profile").arg(profile);
+    if let Some(f) = from_default {
+        cmd.arg("--from-default-profile").arg(f);
+    }
+    for p in patches {
+        cmd.arg("--patch").arg(p);
+    }
+    cmd.args(app_args);
+    apply_slim(&mut cmd, slim);
+    if slim {
+        eprintln!("[rdsh] boot '{profile}' via {orig} (slim ON: {})", crate::slim::describe());
+    }
+    exec_or_spawn(cmd, dry)
+}
+
+pub fn exec_dump_config(profile: &str, patches: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
+    let orig = find_original_dsh().ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
+    let mut cmd = base_cmd(&orig);
+    cmd.arg("--profile").arg(profile);
+    for p in patches {
+        cmd.arg("--patch").arg(p);
+    }
+    cmd.arg("--dump-config");
+    apply_slim(&mut cmd, slim);
+    exec_or_spawn(cmd, dry)
+}
+
+pub fn exec_plugin(profile: &str, pnpm_args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
+    let orig = find_original_dsh().ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
+    let mut cmd = base_cmd(&orig);
+    cmd.arg("plugin").arg("--profile").arg(profile);
+    cmd.args(pnpm_args);
+    apply_slim(&mut cmd, slim);
+    exec_or_spawn(cmd, dry)
+}
