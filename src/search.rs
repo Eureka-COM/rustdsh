@@ -58,19 +58,32 @@ fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             }
             collect_files(&p, out);
         } else if p.is_file() {
-            if let Ok(md) = e.metadata() {
-                if md.len() > 2_000_000 {
-                    continue;
-                }
-            }
+            // No per-file stat here: the 2MB cap is enforced by the bounded
+            // read in grep_one, saving one syscall per file. The stderr file
+            // count therefore includes skipped oversized files (stdout hits
+            // are unchanged).
             out.push(p);
         }
     }
 }
 
+/// Read at most 2MB+1 bytes as UTF-8. Returns None for missing files,
+/// files over 2MB, and non-UTF-8 content — the same skip set as the old
+/// metadata-check plus read_to_string combination (verified by diff).
+fn read_capped(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    f.take(2_000_001).read_to_end(&mut buf).ok()?;
+    if buf.len() > 2_000_000 {
+        return None;
+    }
+    String::from_utf8(buf).ok()
+}
+
 fn grep_one(pattern: &str, path: &std::path::Path) -> Vec<String> {
     let mut hits = vec![];
-    if let Ok(text) = std::fs::read_to_string(path) {
+    if let Some(text) = read_capped(path) {
         for (i, line) in text.lines().enumerate() {
             if line.contains(pattern) {
                 hits.push(format!(
@@ -119,4 +132,29 @@ fn truncate(s: &str, n: usize) -> String {
 
 fn gt_sign() -> char {
     62 as char
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capped_boundary() {
+        let dir = std::env::temp_dir();
+        let exact = dir.join("rdsh-cap-exact.txt");
+        let over = dir.join("rdsh-cap-over.txt");
+        let bin = dir.join("rdsh-cap-bin.bin");
+        std::fs::write(&exact, vec![120u8; 2_000_000]).unwrap();
+        let mut big = vec![120u8; 2_000_001];
+        big.push(121);
+        std::fs::write(&over, big).unwrap();
+        std::fs::write(&bin, [0u8, 159, 146, 150]).unwrap();
+        assert!(read_capped(&exact).is_some());
+        assert!(read_capped(&over).is_none());
+        assert!(read_capped(&bin).is_none());
+        assert!(read_capped(&dir.join("rdsh-cap-missing.txt")).is_none());
+        let _ = std::fs::remove_file(&exact);
+        let _ = std::fs::remove_file(&over);
+        let _ = std::fs::remove_file(&bin);
+    }
 }
