@@ -100,6 +100,7 @@ export function trackAdapter(
       }
       if (writeError) {
         const error = new HistoryError("history_unconfirmed_after_owned_stop");
+        error.cause = writeError;
         error.process_result = result;
         throw error;
       }

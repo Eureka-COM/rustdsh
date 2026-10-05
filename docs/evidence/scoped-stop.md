@@ -1,5 +1,11 @@
 # Scoped stop evidence
 
+The complete 115-test Windows suite also passes on Node 22.23.3. The public
+checkpoint CLI test has a 60-second outer fixture budget, allowing the explicit
+probe/resume/stop sequence to finish on a loaded runner; operation deadlines
+remain bounded independently. Stop-history failures retain their original
+error as `cause`, alongside the independently observed process result.
+
 Issue: [#35](https://github.com/sahenjp/rustdsh/issues/35).
 Contract: [scoped staged stop](../SCOPED-STOP.md).
 
