@@ -187,12 +187,16 @@ rdsh-native subcommand is delegated verbatim to the original binary, so
 - Original-binary discovery order: `RDSH_ORIG_BIN` (legacy `DSH_ORIG_BIN` still
 honored) → `~/.config/rdsh/origin` →
   sibling backups (`dsh-orig`, `dsh.orig`, `dsh.real`) → `PATH` (self excluded) →
-  known npm install paths
+  newest `~/.local/opt/node-v*` tree matching this OS/CPU
 - Naming follows dsh convention: kebab-case commands/flags like the original
   (`dump-config`, `--from-default-profile`), while the `DSH_` env namespace stays
   owned by dsh itself — rdsh-private keys live under `RDSH_`
 - One-shot escapes: `RDSH_PASSTHROUGH=1 dsh ...` (no slim env),
   `RDSH_DRY_RUN=1 dsh ...` (print only)
+- Slim also sets `NODE_COMPILE_CACHE` (Node >= 22.1 only, user value wins,
+  `RDSH_NODE_COMPILE_CACHE=0` opts out). Upstream dsh reads no `RDSH_*` key.
+- Default profile: `RDSH_DEFAULT_PROFILE`, then local `tui`, else a guided error
+  (dsh 0.2.0 ships no `tui` template)
 - Name shadowing: a bare `dsh tokens` runs the rdsh subcommand; a profile
   literally named `tokens` still boots via `dsh --profile tokens`
 - Node wrappers: scripts that run `node "$(... dsh ...)"` break while `dsh` is

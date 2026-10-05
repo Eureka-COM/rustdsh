@@ -78,8 +78,13 @@ pub fn find_original_dsh() -> Option<String> {
         for cand in [
             format!("{home}/.local/bin/dsh.orig"),
             format!("{home}/.local/bin/dsh-orig"),
-            format!("{home}/.local/opt/node-v24.16.0-linux-x64/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"),
         ] {
+            if std::fs::metadata(&cand).is_ok() {
+                return Some(cand);
+            }
+        }
+        if let Some(tree) = latest_node_tree_for(&format!("{home}/.local/opt")) {
+            let cand = format!("{tree}/lib/node_modules/@deepseek-ai/dsh/lib/bin.js");
             if std::fs::metadata(&cand).is_ok() {
                 return Some(cand);
             }
@@ -88,9 +93,149 @@ pub fn find_original_dsh() -> Option<String> {
     None
 }
 
+// Rust target mapped to Node dist labels (node-v<VERSION>-<os>-<arch>).
+fn current_os_arch() -> (&'static str, &'static str) {
+    let os = if cfg!(target_os = "windows") {
+        "win"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    (os, arch)
+}
+
+// Parse node-v<major>.<minor>.<patch>-<os>-<arch>; returns version + labels.
+// Names without a recognizable os/arch suffix return None so trees built
+// for another OS/CPU are never selected.
+pub fn parse_node_tree_version(dir_name: &str) -> Option<((u64, u64, u64), String, String)> {
+    let rest = dir_name.strip_prefix("node-v")?;
+    let mut parts = rest.split('-');
+    let ver = parts.next()?;
+    let nums: Vec<&str> = ver.split('.').collect();
+    if nums.len() != 3 {
+        return None;
+    }
+    let major: u64 = nums[0].parse().ok()?;
+    let minor: u64 = nums[1].parse().ok()?;
+    let patch: u64 = nums[2].parse().ok()?;
+    let os = parts.next()?.to_string();
+    let arch = parts.next()?.to_string();
+    if parts.next().is_some() {
+        return None;
+    }
+    if arch.is_empty() || os.is_empty() {
+        return None;
+    }
+    Some(((major, minor, patch), os, arch))
+}
+
+// Latest node-v* tree under opt_dir matching this OS/CPU. Pure over the
+// entry names so tests stay hermetic; IO version below wraps it.
+pub fn pick_latest_node_tree<'a>(
+    names: &'a [String],
+    want_os: &str,
+    want_arch: &str,
+) -> Option<&'a str> {
+    let mut best: Option<(&'a str, (u64, u64, u64))> = None;
+    for n in names {
+        if let Some((v, os, arch)) = parse_node_tree_version(n) {
+            if os == want_os && arch == want_arch {
+                let take = match &best {
+                    None => true,
+                    Some((_, bv)) => v > *bv,
+                };
+                if take {
+                    best = Some((n.as_str(), v));
+                }
+            }
+        }
+    }
+    best.map(|(n, _)| n)
+}
+
+// IO wrapper: scan opt_dir for the newest matching node-v* tree.
+pub fn latest_node_tree_for(opt_dir: &str) -> Option<String> {
+    let (want_os, want_arch) = current_os_arch();
+    let entries = std::fs::read_dir(opt_dir).ok()?;
+    let mut names: Vec<String> = vec![];
+    for e in entries.flatten() {
+        if e.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+            if let Some(n) = e.file_name().to_str().map(|s| s.to_string()) {
+                names.push(n);
+            }
+        }
+    }
+    pick_latest_node_tree(&names, want_os, want_arch).map(|n| format!("{opt_dir}/{n}"))
+}
+
+// Newest matching tree under ~/.local/opt.
+pub fn latest_node_tree() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    latest_node_tree_for(&format!("{home}/.local/opt"))
+}
+
+// Parse the first major.minor out of node --version output (v24.16.0).
+pub fn parse_node_version(out: &str) -> Option<(u64, u64)> {
+    let line = out.lines().next()?.trim();
+    let v = line.strip_prefix("v").unwrap_or(line);
+    let mut it = v.split('.');
+    let major: u64 = it.next()?.trim().parse().ok()?;
+    let minor: u64 = it.next().unwrap_or("0").trim().parse().ok()?;
+    Some((major, minor))
+}
+
+// Node binary to run .js delegations: PATH node first, else the newest
+// matching tree under ~/.local/opt.
+pub fn find_node_bin() -> Option<String> {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return Some("node".to_string());
+    }
+    let tree = latest_node_tree()?;
+    #[cfg(target_os = "windows")]
+    let cand = format!("{tree}/bin/node.exe");
+    #[cfg(not(target_os = "windows"))]
+    let cand = format!("{tree}/bin/node");
+    if std::fs::metadata(&cand).is_ok() {
+        Some(cand)
+    } else {
+        None
+    }
+}
+
+// True when the node used for delegation supports NODE_COMPILE_CACHE
+// (Node >= 22.1). Missing node means false (no env is set).
+pub fn node_supports_compile_cache() -> bool {
+    let bin = match find_node_bin() {
+        Some(b) => b,
+        None => return false,
+    };
+    let out = std::process::Command::new(&bin).arg("--version").output();
+    let out = match out {
+        Ok(o) if o.status.success() => o,
+        _ => return false,
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    match parse_node_version(&text) {
+        Some((major, minor)) => major > 22 || (major == 22 && minor >= 1),
+        None => false,
+    }
+}
+
 fn base_cmd(orig: &str) -> std::process::Command {
     if orig.ends_with(".js") {
-        let mut c = std::process::Command::new("node");
+        let bin = find_node_bin().unwrap_or_else(|| "node".to_string());
+        let mut c = std::process::Command::new(bin);
         c.arg(orig);
         c
     } else {
@@ -99,9 +244,22 @@ fn base_cmd(orig: &str) -> std::process::Command {
 }
 
 fn apply_slim(cmd: &mut std::process::Command, slim: bool) {
-    if slim {
-        for (k, v) in crate::slim::slim_env() {
-            cmd.env(k, v);
+    if !slim {
+        return;
+    }
+    for (k, v) in crate::slim::slim_env() {
+        cmd.env(k, v);
+    }
+    // V8 code cache for the delegated Node process (Node >= 22.1 only).
+    // Never overrides an explicit user value; RDSH_NODE_COMPILE_CACHE=0 opts out.
+    let hint = std::env::var("RDSH_NODE_COMPILE_CACHE").ok();
+    let existing = std::env::var("NODE_COMPILE_CACHE").ok();
+    if let Some(dir) = crate::slim::default_compile_cache_dir().and_then(|d| {
+        crate::slim::resolve_node_compile_cache(hint.as_deref(), existing.as_deref(), &d)
+    }) {
+        if node_supports_compile_cache() {
+            let _ = std::fs::create_dir_all(&dir);
+            cmd.env("NODE_COMPILE_CACHE", dir);
         }
     }
 }
@@ -217,4 +375,52 @@ pub fn exec_plugin(
     cmd.args(pnpm_args);
     apply_slim(&mut cmd, slim);
     exec_or_spawn(cmd, dry)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sv(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parses_tree_names() {
+        let p = parse_node_tree_version("node-v24.16.0-linux-x64").unwrap();
+        assert_eq!(p.0, (24, 16, 0));
+        assert_eq!(p.1, "linux");
+        assert_eq!(p.2, "x64");
+        assert!(parse_node_tree_version("node-v24.16.0").is_none());
+        assert!(parse_node_tree_version("node-v24-linux-x64").is_none());
+        assert!(parse_node_tree_version("other-v24.0.0-linux-x64").is_none());
+    }
+
+    #[test]
+    fn skips_foreign_trees_and_picks_latest() {
+        let names = sv(&[
+            "node-v20.11.0-linux-x64",
+            "node-v24.16.0-darwin-arm64",
+            "node-v22.1.0-linux-x64",
+            "node-v24.16.0-linux-x64",
+            "node-v24.16.0-linux-arm64",
+            "node-v24.16.0-win-x64",
+        ]);
+        assert_eq!(
+            pick_latest_node_tree(&names, "linux", "x64"),
+            Some("node-v24.16.0-linux-x64")
+        );
+        assert_eq!(
+            pick_latest_node_tree(&names, "darwin", "arm64"),
+            Some("node-v24.16.0-darwin-arm64")
+        );
+        assert_eq!(pick_latest_node_tree(&names, "win", "arm64"), None);
+    }
+
+    #[test]
+    fn parses_node_version_strings() {
+        assert_eq!(parse_node_version("v24.16.0\n"), Some((24, 16)));
+        assert_eq!(parse_node_version("v22.1.0"), Some((22, 1)));
+        assert_eq!(parse_node_version("v20.11.0"), Some((20, 11)));
+        assert!(parse_node_version("not-a-version").is_none());
+    }
 }
