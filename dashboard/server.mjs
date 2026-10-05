@@ -121,9 +121,11 @@ export async function startDashboard(options) {
           ...(share.url ? [new URL(share.url).origin] : []),
         ]),
         hosts: new Set(
-          [localUrl.slice(0, -1), `http://localhost:${port}`].map(
-            (o) => new URL(o).host,
-          ),
+          [
+            localUrl.slice(0, -1),
+            `http://localhost:${port}`,
+            ...(share.url ? [new URL(share.url).origin] : []),
+          ].map((o) => new URL(o).host),
         ),
       };
     }
@@ -154,6 +156,7 @@ export async function startDashboard(options) {
       for (const [key, value] of harness.url.searchParams)
         url.searchParams.set(key, value);
       url.hash = harness.url.hash;
+      url.searchParams.set("rdsh_dashboard_key", browserToken);
     }
     return url.href;
   }
