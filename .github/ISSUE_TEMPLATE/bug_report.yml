@@ -1,0 +1,43 @@
+name: Bug report
+title: "[Bug] "
+description: Something is broken. バグ報告 (Japanese OK).
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `rdsh --version` (or tag/commit).
+      placeholder: "v0.1.2"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, shell, install method.
+      placeholder: "Ubuntu 24.04 / bash / install.sh --from-release"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal commands. Include `rdsh doctor` output.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+      description: What should happen, and what happens instead.
+    validations:
+      required: true
+  - type: textarea
+    id: dryrun
+    attributes:
+      label: Delegation context (if relevant)
+      description: For delegation bugs, paste `rdsh --dry-run ...` output.

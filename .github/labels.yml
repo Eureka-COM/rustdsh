@@ -1,0 +1,32 @@
+# Managed labels. Apply with: sh scripts/sync-labels.sh
+# (requires gh CLI with repo scope)
+- name: bug
+  color: d73a4a
+  description: Something is broken
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+- name: performance
+  color: f9d0c4
+  description: Speed or memory work with numbers
+- name: docs
+  color: 0075ca
+  description: Documentation only
+- name: dashboard
+  color: 5319e7
+  description: dashboard/ Node component
+- name: installer
+  color: fbca04
+  description: install.sh / install.ps1 / release assets
+- name: security
+  color: b60205
+  description: Security-sensitive, handle with care
+- name: good first issue
+  color: 7057ff
+  description: Good for newcomers
+- name: needs-repro
+  color: e4e669
+  description: Waiting for reproduction steps or doctor output
+- name: ja
+  color: 0e8a16
+  description: Japanese-language thread (Japanese OK)

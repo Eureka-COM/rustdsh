@@ -1,0 +1,33 @@
+name: Performance report
+title: "[Perf] "
+description: Speed or memory regression / win. Numbers required.
+labels: [performance]
+body:
+  - type: input
+    id: commit
+    attributes:
+      label: Commit / version
+      placeholder: "v0.1.2 or abc1234"
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: Machine and OS
+      placeholder: "Linux x86_64, 8c/16t"
+    validations:
+      required: true
+  - type: textarea
+    id: numbers
+    attributes:
+      label: Numbers (before / after)
+      description: Paste raw output (rdsh bench, /usr/bin/time -v). Tables alone are not enough.
+    validations:
+      required: true
+  - type: textarea
+    id: equality
+    attributes:
+      label: Output equality proof
+      description: How did you verify outputs are identical?
+    validations:
+      required: true

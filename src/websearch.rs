@@ -14,7 +14,15 @@ fn default_base() -> String {
                 s
             }
         }
-        Err(_) => "http://127.0.0.1:8888".to_string(),
+        Err(_) => {
+            let u = crate::rdsh_config::load().search.searxng_url;
+            let u = u.trim().trim_end_matches('/').to_string();
+            if u.is_empty() {
+                "http://127.0.0.1:8888".to_string()
+            } else {
+                u
+            }
+        }
     }
 }
 

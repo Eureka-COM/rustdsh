@@ -1,2 +1,31 @@
 /target
 /dashboard/node_modules/
+
+# Rust
+**/*.rs.bk
+*.pdb
+.cargo/
+
+# Node
+dist/
+coverage/
+*.log
+npm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env and secrets (never commit these)
+.env
+.env.*
+*.pem
+*.key
+
+# Scratch / local state
+/tmp/
+*.tmp

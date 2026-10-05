@@ -2,3 +2,23 @@
 *.sh text eol=lf
 # PowerShell prefers CRLF on Windows.
 *.ps1 text eol=crlf
+
+# Rust sources always LF.
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+
+# Docs and configs.
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+
+# Archives and images are binary.
+*.gz binary
+*.zip binary
+*.png binary
+*.gif binary
+*.svg text eol=lf

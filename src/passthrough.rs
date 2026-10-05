@@ -10,9 +10,7 @@ pub fn env_dry() -> bool {
 
 fn origin_file() -> Option<String> {
     // install.ps1 records the backup here on native Windows (USERPROFILE).
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()?;
+    let home = crate::inspect::home_dir()?;
     let p = format!("{home}/.config/rdsh/origin");
     let s = std::fs::read_to_string(p).ok()?;
     let s = s.trim().to_string();
@@ -74,7 +72,7 @@ pub fn find_original_dsh() -> Option<String> {
             }
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
+    if let Some(home) = crate::inspect::home_dir() {
         for cand in [
             format!("{home}/.local/bin/dsh.orig"),
             format!("{home}/.local/bin/dsh-orig"),
@@ -176,30 +174,27 @@ pub fn latest_node_tree_for(opt_dir: &str) -> Option<String> {
 
 // Newest matching tree under ~/.local/opt.
 pub fn latest_node_tree() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::inspect::home_dir()?;
     latest_node_tree_for(&format!("{home}/.local/opt"))
 }
 
-// Parse the first major.minor out of node --version output (v24.16.0).
-pub fn parse_node_version(out: &str) -> Option<(u64, u64)> {
-    let line = out.lines().next()?.trim();
-    let v = line.strip_prefix("v").unwrap_or(line);
-    let mut it = v.split('.');
-    let major: u64 = it.next()?.trim().parse().ok()?;
-    let minor: u64 = it.next().unwrap_or("0").trim().parse().ok()?;
-    Some((major, minor))
-}
-
-// Node binary to run .js delegations: PATH node first, else the newest
+// Node binary to run .js delegations: PATH lookup is metadata-only (a
+// `node --version` spawn costs ~14ms per delegation), else the newest
 // matching tree under ~/.local/opt.
 pub fn find_node_bin() -> Option<String> {
-    if std::process::Command::new("node")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        return Some("node".to_string());
+    #[cfg(target_os = "windows")]
+    const NAMES: &[&str] = &["node.exe", "node.cmd", "node.bat", "node"];
+    #[cfg(not(target_os = "windows"))]
+    const NAMES: &[&str] = &["node"];
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            for n in NAMES {
+                let cand = dir.join(n);
+                if cand.is_file() {
+                    return Some(cand.to_string_lossy().into_owned());
+                }
+            }
+        }
     }
     let tree = latest_node_tree()?;
     #[cfg(target_os = "windows")]
@@ -210,25 +205,6 @@ pub fn find_node_bin() -> Option<String> {
         Some(cand)
     } else {
         None
-    }
-}
-
-// True when the node used for delegation supports NODE_COMPILE_CACHE
-// (Node >= 22.1). Missing node means false (no env is set).
-pub fn node_supports_compile_cache() -> bool {
-    let bin = match find_node_bin() {
-        Some(b) => b,
-        None => return false,
-    };
-    let out = std::process::Command::new(&bin).arg("--version").output();
-    let out = match out {
-        Ok(o) if o.status.success() => o,
-        _ => return false,
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    match parse_node_version(&text) {
-        Some((major, minor)) => major > 22 || (major == 22 && minor >= 1),
-        None => false,
     }
 }
 
@@ -250,17 +226,17 @@ fn apply_slim(cmd: &mut std::process::Command, slim: bool) {
     for (k, v) in crate::slim::slim_env() {
         cmd.env(k, v);
     }
-    // V8 code cache for the delegated Node process (Node >= 22.1 only).
+    // V8 code cache for the delegated Node process. Set unconditionally:
+    // Node < 22.1 ignores the variable, and a version probe would cost a
+    // `node --version` spawn (~14ms) per launch — more than the cache saves.
     // Never overrides an explicit user value; RDSH_NODE_COMPILE_CACHE=0 opts out.
     let hint = std::env::var("RDSH_NODE_COMPILE_CACHE").ok();
     let existing = std::env::var("NODE_COMPILE_CACHE").ok();
     if let Some(dir) = crate::slim::default_compile_cache_dir().and_then(|d| {
         crate::slim::resolve_node_compile_cache(hint.as_deref(), existing.as_deref(), &d)
     }) {
-        if node_supports_compile_cache() {
-            let _ = std::fs::create_dir_all(&dir);
-            cmd.env("NODE_COMPILE_CACHE", dir);
-        }
+        let _ = std::fs::create_dir_all(&dir);
+        cmd.env("NODE_COMPILE_CACHE", dir);
     }
 }
 
@@ -295,10 +271,9 @@ pub fn exec_boot(
     slim: bool,
 ) -> anyhow::Result<()> {
     if !dry {
-        crate::auth::auto_sync();
-        // First boot with no model credential: say the exact next step
-        // instead of letting dsh open with a bare DeepSeek prompt.
-        crate::auth::first_boot_banner();
+        // One credential scan drives both the mirror import and the
+        // first-boot banner decision.
+        crate::auth::pre_boot(true);
     }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
@@ -328,7 +303,7 @@ pub fn exec_dump_config(
     slim: bool,
 ) -> anyhow::Result<()> {
     if !dry {
-        crate::auth::auto_sync();
+        crate::auth::pre_boot(false);
     }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
@@ -347,8 +322,7 @@ pub fn exec_raw(args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
     // Same first-boot guidance as exec_boot: `dsh` (shadowed) is the usual
     // first thing a newcomer runs.
     if !dry {
-        crate::auth::auto_sync();
-        crate::auth::first_boot_banner();
+        crate::auth::pre_boot(true);
     }
     let orig = find_original_dsh().ok_or_else(|| {
         anyhow::anyhow!("original dsh not found (set DSH_ORIG_BIN or reinstall with install.sh)")
@@ -366,7 +340,7 @@ pub fn exec_plugin(
     slim: bool,
 ) -> anyhow::Result<()> {
     if !dry {
-        crate::auth::auto_sync();
+        crate::auth::pre_boot(false);
     }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
@@ -414,13 +388,5 @@ mod tests {
             Some("node-v24.16.0-darwin-arm64")
         );
         assert_eq!(pick_latest_node_tree(&names, "win", "arm64"), None);
-    }
-
-    #[test]
-    fn parses_node_version_strings() {
-        assert_eq!(parse_node_version("v24.16.0\n"), Some((24, 16)));
-        assert_eq!(parse_node_version("v22.1.0"), Some((22, 1)));
-        assert_eq!(parse_node_version("v20.11.0"), Some((20, 11)));
-        assert!(parse_node_version("not-a-version").is_none());
     }
 }

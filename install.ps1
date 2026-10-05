@@ -1,5 +1,11 @@
 #!/usr/bin/env pwsh
 # rdsh installer for native Windows, with optional WSL side-install.
+# Release checklist (Issue #7, docs only):
+# 1) bump version in Cargo.toml, 2) cargo build/test/regress green,
+# 3) commit + push, 4) cargo publish (needs crates.io token + verified email),
+# 5) refresh live install via install.ps1 -AsDsh (or install.sh --as-dsh in WSL)
+# and verify `dsh --version` delegation, 6) confirm sync-dsh.sh picks up
+# the new version on its next run.
 #   .\install.ps1                  # build + install rdsh
 #   .\install.ps1 -AsDsh           # also shadow dsh (backs up to dsh-orig)
 #   .\install.ps1 -Restore         # restore the backed-up original dsh

@@ -53,10 +53,15 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 }
 
 pub fn random_token() -> anyhow::Result<String> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|e| anyhow::anyhow!("OS random source failed: {e}"))?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS random source failed: {e}"))?;
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    Ok(out)
 }
 
 pub fn read_request(stream: &mut TcpStream) -> Result<Request, u16> {

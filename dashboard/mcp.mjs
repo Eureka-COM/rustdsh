@@ -13,6 +13,13 @@ import path from "node:path";
 import { metricNames } from "./state.mjs";
 import { observationSchema } from "./observations.mjs";
 
+// Bucket E (MCP) diagnostics — Issues #76-#79:
+// Exposure control (#76), remote OAuth (#77), single-screen server
+// diagnostics (#78), and binary resource handling (#79) live in the outer
+// MCP layers, not in this dashboard server. Changes here stay limited to
+// diagnostic wording and comments so callers can tell which name/URI failed,
+// what exists, and what to do next. No large feature additions.
+
 const string = { type: "string", minLength: 1, maxLength: 8000 };
 const object = (properties, required = []) => ({
   type: "object",
@@ -100,6 +107,22 @@ const routes = {
   dashboard_ask_question: "question",
   dashboard_publish_event: "event",
 };
+// #76: exact tool names take precedence over patterns; hidden tools stay
+// unreachable via direct calls, PTC, and search. This server never bypasses
+// the existing permission guard - unknown names fail closed and name the
+// known tools with their source (the tools export in this module).
+export function knownToolNames() {
+  return tools.map((tool) => tool.name);
+}
+export function diagnoseUnknownTool(name) {
+  return (
+    `Unknown tool "${String(name)}": exact names take precedence over patterns. ` +
+      `Available tools from this server: ${knownToolNames().join(", ")}. ` +
+      `Check the effective exposure source (direct/deferred/hidden); hidden tools ` +
+      `stay unreachable via direct calls, PTC, and search, and this server never ` +
+      `bypasses the existing permission guard.`
+  );
+}
 export async function executeTool(api, name, args = {}) {
   if (name === "dashboard_get_state") return await api.getState();
   if (name === "dashboard_get_feedback")
@@ -108,7 +131,7 @@ export async function executeTool(api, name, args = {}) {
     const state = await api.mutate(routes[name], args);
     return { project: state.project.id, revision: state.revision };
   }
-  throw new Error("Unknown tool");
+  throw new Error(diagnoseUnknownTool(name));
 }
 const resourceDefinitions = [
   {
@@ -124,11 +147,28 @@ const resourceDefinitions = [
 ];
 export function feedbackSince(state, after = 0) {
   if (!Number.isSafeInteger(after) || after < 0)
-    throw new Error("after must be a non-negative integer");
+    throw new Error(
+      `after must be a non-negative integer (received ${String(after)}). ` +
+        `Pass next_cursor from the previous dashboard_get_feedback response; ` +
+        `reads never consume or delete feedback.`,
+    );
   const messages = state.feedback
     .filter((item) => item.sequence > after)
     .slice(0, 100);
   return { messages, next_cursor: messages.at(-1)?.sequence ?? after };
+}
+// #78 (single-screen diagnostics) / #79 (binary resources stay safe):
+// keep text, supported images, and other binaries distinct; never expand
+// base64 into model-facing text here. ui:// app resources are unsupported
+// and HTML/script is never auto-executed. Returned URLs are never fetched
+// unconditionally - reach the origin server/URI only via an explicit action.
+export function diagnoseUnknownResource(uri) {
+  return (
+    `Unknown resource "${String(uri)}": known resources: ${resourceDefinitions.map((r) => r.uri).join(", ")}. ` +
+      `Binary payloads are validated by size/MIME before saving and never expanded ` +
+      `to text; ui:// app resources are unsupported and HTML/script is never ` +
+      `auto-executed. Use an explicit action to reach the origin server/URI.`
+  );
 }
 export function createMcpServer(api) {
   const server = new Server(
@@ -156,7 +196,7 @@ export function createMcpServer(api) {
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
     if (!resourceDefinitions.some((resource) => resource.uri === uri))
-      throw new Error("Unknown resource");
+      throw new Error(diagnoseUnknownResource(uri));
     const state = await api.getState();
     return {
       contents: [
@@ -176,7 +216,7 @@ export function createMcpServer(api) {
         (resource) => resource.uri === request.params.uri,
       )
     )
-      throw new Error("Unknown resource");
+      throw new Error(diagnoseUnknownResource(request.params.uri));
     subscriptions.add(request.params.uri);
     return {};
   });
@@ -197,10 +237,18 @@ export async function runStdio(project) {
     JSON.parse(
       await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
     );
+  // #77: remote MCP OAuth (discovery/login/refresh, per server name+URL) is
+  // handled outside this file. This bearer token is scoped to one project
+  // runtime only; refresh/logout affect just that entry, and secret values
+  // never go to issues, logs, or profile exports.
   async function request(route, input) {
     const runtime = await readRuntime();
     if (runtime.kind !== "project" || runtime.project_id !== project.id)
-      throw new Error("Dashboard runtime belongs to a different project");
+      throw new Error(
+        "Dashboard runtime belongs to a different project. " +
+          "Reconnect this project to refresh runtime.json; tokens stay bound " +
+          "to one project and are never written to issues, logs, or exports.",
+      );
     const response = await fetch(`${runtime.local_url}${route}`, {
       method: input ? "POST" : "GET",
       headers: {
