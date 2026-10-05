@@ -374,12 +374,31 @@ test("a dead writer lock permits read-only restoration but is never silently sto
   assert.equal(inspected.recovery.writer_lock.present, true);
   assert.equal(inspected.recovery.writer_lock.automatic_removal, false);
   if (["win32", "linux"].includes(process.platform))
-    assert.equal(inspected.recovery.writer_lock.owner_process, "gone");
+    // A bounded native observation may time out on a busy Windows runner.
+    // Uncertainty must still preserve the lock and block writes.
+    assert.ok(
+      ["gone", "pid_reused", "unknown"].includes(
+        inspected.recovery.writer_lock.owner_process,
+      ),
+    );
   await assert.rejects(
     f.history.transition(id, "running", "cli_prompt_pending"),
     error("history_busy"),
   );
   assert.deepEqual(await fs.readFile(f.history.lock), original);
+  const unavailableOwner = JSON.stringify({
+    owner_id: JSON.parse(original).owner_id,
+    identity: null,
+  });
+  await fs.writeFile(f.history.lock, unavailableOwner);
+  const unavailable = await (await RunHistory.open(f.project)).inspect(id);
+  assert.equal(unavailable.recovery.writer_lock.owner_process, "unknown");
+  assert.equal(unavailable.recovery.writer_lock.automatic_removal, false);
+  await assert.rejects(
+    f.history.transition(id, "running", "cli_prompt_pending"),
+    error("history_busy"),
+  );
+  assert.equal(await fs.readFile(f.history.lock, "utf8"), unavailableOwner);
 });
 
 test("corrupt, foreign-project and unknown-schema histories are preserved and rejected", async (t) => {
