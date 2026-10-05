@@ -104,6 +104,10 @@ function upstreamHeaders(req, port, cookieName, adminToken) {
 }
 export function proxyHarness(req, res, port, cookieName, adminToken) {
   // Only authenticated same-origin callers reach this proxy. dsh still checks its own process token.
+  // #12 contract fence: out-of-contract targets never start here; the proxy
+  // only forwards, it never widens the allowed scope.
+  // #15 capped plan: no extra workers are spawned here; one upstream per
+  // request keeps concurrency bounded by the caller's plan.
   const headers = upstreamHeaders(req, port, cookieName, adminToken);
   if (headers.origin) headers.origin = `http://127.0.0.1:${port}`;
   if (headers.referer) headers.referer = `http://127.0.0.1:${port}/`;
@@ -118,7 +122,7 @@ export function proxyHarness(req, res, port, cookieName, adminToken) {
   );
   upstream.on("error", () => {
     if (!res.headersSent) res.writeHead(502);
-    res.end("Harness is not available");
+    res.end("Harness is not available; confirm it is running and retry");
   });
   req.pipe(upstream);
 }
