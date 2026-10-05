@@ -5,7 +5,7 @@ Design rule: **port only the hot paths, delegate everything else**.
 
 ## Big picture
 
-```
+```text
 user -> rdsh (argv) -> decision
                           |- native fast path (no Node startup)
                           |    tokens / compact / inspect / serve / guard / search

@@ -1,4 +1,9 @@
 default: true
 MD013: false
+MD024:
+  # Duplicate headings are fine across different sections (Keep a
+  # Changelog repeats "### Added" per release; CONTRIBUTING repeats
+  # "## Pull Request" in EN and JA). Only siblings must stay unique.
+  siblings_only: true
 MD033: false
 MD041: false
