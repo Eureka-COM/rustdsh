@@ -1,3 +1,5 @@
+import { metricView, observationView, ratioView } from "./observations.mjs";
+
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.startsWith("/_rdsh") ? "/_rdsh/" : "/";
 const browserToken = base === "/"
@@ -61,13 +63,100 @@ function emptyRow(text, columns) {
   tr.append(cell);
   return tr;
 }
-function render(state) {
-  const m = state.metrics,
-    done = state.tasks.filter((task) => task.status === "done").length,
-    pending = state.questions.filter((question) => question.answer === null),
-    answered = state.questions.length - pending.length;
-  const cache = ratio(m.cached_input_tokens, m.input_tokens),
-    errors = ratio(m.tool_errors, m.tool_calls);
+const date = (value) =>
+  value ? new Date(value).toLocaleString("ja-JP") : "未申告";
+const freshnessLabels = {
+  fresh: "",
+  stale: "古い情報",
+  unknown: "鮮度未確認",
+  unavailable: "未取得",
+};
+let openObservations = new Set();
+function provenance(view, label, format = String, id = "") {
+  const element = node("div", undefined, "observation");
+  element.dataset.freshness = view.freshness;
+  element.dataset.kind = view.kind || "unknown";
+  const heading = node("div", undefined, "observation-heading");
+  if (label) heading.append(node("span", label + "："));
+  heading.append(
+    node("span", view.label, "provenance-badge " + (view.kind || "unknown")),
+  );
+  if (view.freshness === "stale" || view.freshness === "unknown")
+    heading.append(
+      node("span", freshnessLabels[view.freshness], "provenance-badge " + view.freshness),
+    );
+  element.append(heading);
+  if (view.value != null && !view.current)
+    element.append(node("div", "前回の報告値：" + format(view.value), "sub"));
+  const o = view.observation;
+  element.append(node("div", "観測：" + date(o?.observed_at), "sub"));
+  const details = node("details", undefined, "observation-details");
+  details.dataset.observationId = id;
+  details.open = openObservations.has(id);
+  const summary = node("summary", "報告元・参照対象");
+  summary.dataset.observationId = id;
+  details.append(
+    summary,
+    node("div", "報告元：" + (o?.source || "未申告")),
+    node("div", "報告session：" + (o?.session_id || "未申告")),
+    node("div", "参照対象：" + (o?.reference || "未申告")),
+    node("div", "受信：" + date(o?.recorded_at)),
+  );
+  if (o?.observed_at && o.max_age_seconds) {
+    const expiresAt = new Date(Date.parse(o.observed_at) + o.max_age_seconds * 1000);
+    details.append(node("div", "鮮度期限：" + date(expiresAt.toISOString())));
+  }
+  element.append(details);
+  return element;
+}
+function metricText(state, key, format, now) {
+  const view = metricView(state, key, now);
+  return view.current
+    ? (view.kind === "estimated" ? "推定 " : "") + format(view.value)
+    : freshnessLabels[view.freshness];
+}
+function metricCard(state, now, label, value, detail, fields, progress, warning) {
+  const element = card(label, value, detail, progress, warning);
+  for (const [name, key, format = number] of fields)
+    element.append(
+      provenance(metricView(state, key, now), name, format, "metric:" + key),
+    );
+  return element;
+}
+function rateText(state, a, b, now) {
+  const result = ratioView(state, a, b, now);
+  if (result.reason === "incompatible") return "比較不可";
+  if (result.value !== null)
+    return (metricView(state, a, now).kind === "estimated" ? "推定 " : "") + percentage(result.value);
+  const views = [metricView(state, a, now), metricView(state, b, now)];
+  if (views.some((view) => view.freshness === "stale")) return "古い情報";
+  if (views.some((view) => view.freshness === "unknown")) return "鮮度未確認";
+  return "未取得";
+}
+function freshnessSignature(state, now) {
+  return JSON.stringify([
+    Object.keys(state.metrics).map((key) => metricView(state, key, now).freshness),
+    state.tasks.map((task) => observationView(task.status, task.observation, now).freshness),
+    state.events.slice(-30).map((event) => observationView(event.title, event.observation, now).freshness),
+  ]);
+}
+let reportFreshnessSignature = null;
+function renderReports(state, now = Date.now()) {
+  openObservations = new Set(
+    [...document.querySelectorAll("details.observation-details[open]")]
+      .map((element) => element.dataset.observationId),
+  );
+  const activeDisclosure = document.activeElement?.dataset?.observationId;
+  const metric = (key, format = number) => metricText(state, key, format, now);
+  const progress = (a, b) => ratio(
+    metricView(state, a, now).current ? state.metrics[a] : null,
+    metricView(state, b, now).current ? state.metrics[b] : null,
+  );
+  const currentDone = state.tasks.filter((task) => {
+    const view = observationView(task.status, task.observation, now);
+    return task.status === "done" && view.current && view.kind !== "estimated";
+  }).length;
+  const pending = state.questions.filter((question) => question.answer === null);
   const counts = ["done", "doing", "todo", "blocked"]
     .map(
       (status) =>
@@ -75,44 +164,48 @@ function render(state) {
     )
     .join(" · ");
   $("cards").replaceChildren(
-    card(
+    metricCard(state, now,
       "費用（API換算、累計）",
-      money(m.total_cost_usd),
-      m.total_budget_usd == null
-        ? "上限 未設定"
-        : "上限 " + money(m.total_budget_usd),
-      ratio(m.total_cost_usd, m.total_budget_usd),
+      metric("total_cost_usd", money),
+      "上限 " + metric("total_budget_usd", money),
+      [["費用", "total_cost_usd", money], ["上限", "total_budget_usd", money]],
+      progress("total_cost_usd", "total_budget_usd"),
     ),
-    card(
+    metricCard(state, now,
       "直近のセッション",
-      money(m.session_cost_usd),
-      `${m.session_id || "未取得"}　上限 ${m.session_budget_usd == null ? "未設定" : money(m.session_budget_usd)}`,
-      ratio(m.session_cost_usd, m.session_budget_usd),
+      metric("session_cost_usd", money),
+      `${state.metrics.session_id || "session未申告"}　上限 ${metric("session_budget_usd", money)}`,
+      [["費用", "session_cost_usd", money], ["上限", "session_budget_usd", money]],
+      progress("session_cost_usd", "session_budget_usd"),
     ),
-    card(
+    metricCard(state, now,
       "キャッシュ読み込み率",
-      percentage(cache),
-      `${number(m.model_calls)} 回の呼び出し（入力トークン加重）`,
+      rateText(state, "cached_input_tokens", "input_tokens", now),
+      `${metric("model_calls")} 回の呼び出し（入力トークン加重）`,
+      [["キャッシュ", "cached_input_tokens"], ["入力", "input_tokens"], ["呼び出し", "model_calls"]],
     ),
-    card(
+    metricCard(state, now,
       "ツールのエラー率",
-      percentage(errors),
-      `${number(m.tool_errors)} / ${number(m.tool_calls)} 件`,
+      rateText(state, "tool_errors", "tool_calls", now),
+      `${metric("tool_errors")} / ${metric("tool_calls")} 件`,
+      [["エラー", "tool_errors"], ["ツール", "tool_calls"]],
     ),
-    card(
+    metricCard(state, now,
       "文脈の読み落とし",
-      number(m.context_misses),
+      metric("context_misses"),
       "報告元で検出した回数",
+      [["検出数", "context_misses"]],
       undefined,
-      m.context_misses > 0,
+      metricView(state, "context_misses", now).current && state.metrics.context_misses > 0,
     ),
-    card(
+    metricCard(state, now,
       "自動続行",
-      number(m.auto_continues),
-      `拒否 ${number(m.refusals)} · APIエラー ${number(m.api_errors)}`,
+      metric("auto_continues"),
+      `拒否 ${metric("refusals")} · APIエラー ${metric("api_errors")}`,
+      [["続行", "auto_continues"], ["拒否", "refusals"], ["APIエラー", "api_errors"]],
     ),
-    card("タスク", `${done} / ${state.tasks.length}`, counts),
-    card("未回答の質問", String(pending.length), `回答済み ${answered}`),
+    card("鮮度内の完了報告", `${currentDone} / ${state.tasks.length}`, "全報告の内訳：" + counts),
+    card("未回答の質問", String(pending.length), `回答済み ${state.questions.length - pending.length}`),
   );
   $("task-milestones").textContent = [
     ...new Set(state.tasks.map((task) => task.milestone).filter(Boolean)),
@@ -121,11 +214,19 @@ function render(state) {
     ...state.tasks.map((task) => {
       const tr = node("tr");
       const status = node("td");
-      status.append(node("span", task.status, "status " + task.status));
+      const view = observationView(task.status, task.observation, now);
+      const statusLabel = (view.kind === "estimated" ? "推定 " : "") +
+        task.status + (view.current ? "" : "（" + freshnessLabels[view.freshness] + "）");
+      status.append(node(
+        "span", statusLabel,
+        "status " + (view.current && view.kind !== "estimated" ? task.status : ""),
+      ));
+      const title = node("td", task.title);
+      title.append(provenance(view, undefined, String, "task:" + task.id));
       tr.append(
         node("td", task.id, "id"),
         status,
-        node("td", task.title),
+        title,
         node("td", task.blocker),
       );
       return tr;
@@ -133,6 +234,17 @@ function render(state) {
   );
   if (!state.tasks.length)
     $("tasks").append(emptyRow("タスクはまだ登録されていません", 4));
+  renderEvents(state, now);
+  reportFreshnessSignature = freshnessSignature(state, now);
+  if (activeDisclosure)
+    [...document.querySelectorAll("summary[data-observation-id]")]
+      .find((summary) => summary.dataset.observationId === activeDisclosure)?.focus();
+}
+let lastState = null;
+function render(state) {
+  lastState = state;
+  renderReports(state);
+  const pending = state.questions.filter((question) => question.answer === null);
   // Preserve in-progress human drafts while incoming events refresh the dashboard.
   const drafts = new Map(
     [...$("questions").querySelectorAll("textarea")].map((area) => [
@@ -187,29 +299,6 @@ function render(state) {
     [...$("questions").querySelectorAll("textarea")]
       .find((area) => area.dataset.id === active)
       ?.focus();
-  $("events").replaceChildren(
-    ...state.events
-      .slice(-30)
-      .reverse()
-      .map((event) => {
-        const element = node("article", undefined, "event");
-        element.append(
-          node("strong", event.title),
-          node(
-            "div",
-            `${event.type} · ${new Date(event.created_at).toLocaleString("ja-JP")}`,
-            "sub",
-          ),
-        );
-        if (event.detail) element.append(node("p", event.detail));
-        if (event.artifact) element.append(node("code", event.artifact));
-        return element;
-      }),
-  );
-  if (!state.events.length)
-    $("events").append(
-      node("div", "進捗・成果物の報告はまだありません", "empty"),
-    );
   $("answers").replaceChildren(
     ...state.questions
       .filter((question) => question.answer !== null)
@@ -226,8 +315,46 @@ function render(state) {
   );
   $("connection").textContent = "接続済み · プロジェクト専用";
   $("updated").textContent =
-    `最終更新: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 未取得の指標はMCPから報告されたときに表示されます。費用は報告元のAPI換算値です。`;
+    `最終受信: ${state.updated_at ? date(state.updated_at) : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。費用は報告元のAPI換算値です。`;
 }
+function renderEvents(state, now) {
+  $("events").replaceChildren(
+    ...state.events
+      .slice(-30)
+      .reverse()
+      .map((event) => {
+        const element = node("article", undefined, "event");
+        element.append(
+          node("strong", event.title),
+          node(
+            "div",
+            `${event.type} · ${new Date(event.created_at).toLocaleString("ja-JP")}`,
+            "sub",
+          ),
+        );
+        if (event.detail) element.append(node("p", event.detail));
+        if (event.artifact) element.append(node("code", event.artifact));
+        element.append(provenance(
+          observationView(event.title, event.observation, now),
+          undefined, String, "event:" + event.sequence,
+        ));
+        return element;
+      }),
+  );
+  if (!state.events.length)
+    $("events").append(
+      node("div", "進捗・成果物の報告はまだありません", "empty"),
+    );
+}
+// Freshness expires even when no new SSE events arrive. Do not rebuild answer forms.
+function refreshFreshness() {
+  if (lastState && freshnessSignature(lastState, Date.now()) !== reportFreshnessSignature)
+    renderReports(lastState);
+}
+setInterval(refreshFreshness, 30000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshFreshness();
+});
 async function refreshState() {
   try {
     render(await api("state"));

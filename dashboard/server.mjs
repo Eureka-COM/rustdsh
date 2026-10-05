@@ -237,7 +237,7 @@ export async function startDashboard(options) {
         (req.method === "POST" && ["metrics", "task", "question", "event"].some((operation) => route === `/api/update/${operation}`));
       const mcpAuthorized = kind === "project" && agentRoute && equal(req.headers.authorization, `Bearer ${mcpToken}`);
       const humanAuthorized = browserAuthorized(req, url, route);
-      const publicAsset = kind === "project" && req.method === "GET" && (route === "/" || route === "/app.mjs");
+      const publicAsset = kind === "project" && req.method === "GET" && ["/", "/app.mjs", "/observations.mjs"].includes(route);
       if (!publicAsset && !adminAuthorized && !mcpAuthorized && !humanAuthorized)
         return json(res, 401, {
           error:
@@ -270,11 +270,11 @@ export async function startDashboard(options) {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         return res.end(await fs.readFile(path.join(here, "ui.html")));
       }
-      if (req.method === "GET" && route === "/app.mjs") {
+      if (req.method === "GET" && ["/app.mjs", "/observations.mjs"].includes(route)) {
         res.writeHead(200, {
           "content-type": "text/javascript; charset=utf-8",
         });
-        return res.end(await fs.readFile(path.join(here, "app.mjs")));
+        return res.end(await fs.readFile(path.join(here, route.slice(1))));
       }
       if (req.method === "GET" && route === "/api/config")
         return json(res, 200, {

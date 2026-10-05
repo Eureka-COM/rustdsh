@@ -11,6 +11,7 @@ import {
 import fs from "node:fs/promises";
 import path from "node:path";
 import { metricNames } from "./state.mjs";
+import { observationSchema } from "./observations.mjs";
 
 const string = { type: "string", minLength: 1, maxLength: 8000 };
 const object = (properties, required = []) => ({
@@ -23,7 +24,7 @@ export const tools = [
   {
     name: "dashboard_update_metrics",
     description:
-      "Replace reported project metrics with measured values. Omit unknown metrics; never estimate costs or cache/error rates from unrelated data. Counters are cumulative snapshots, not increments.",
+      "Report cumulative metric snapshots, not increments. Include observation kind, source, observed_at, session_id and reference to distinguish measurements, agent reports and explicit estimates. Omit unknown metrics or use null; never invent missing costs. Observation applies only to supplied fields; send ratio counters together.",
     inputSchema: object(
       Object.fromEntries([
         ...metricNames.map((name) => [
@@ -31,6 +32,7 @@ export const tools = [
           { type: ["number", "null"], minimum: 0 },
         ]),
         ["session_id", string],
+        ["observation", observationSchema],
       ]),
     ),
   },
@@ -45,6 +47,7 @@ export const tools = [
         status: { enum: ["todo", "doing", "done", "blocked"] },
         milestone: string,
         blocker: string,
+        observation: observationSchema,
       },
       ["id", "title", "status"],
     ),
@@ -73,6 +76,7 @@ export const tools = [
         title: string,
         detail: string,
         artifact: string,
+        observation: observationSchema,
       },
       ["title"],
     ),
