@@ -1,5 +1,7 @@
 #!/bin/sh
 # Install recommended dsh plugins into a profile (idempotent per package).
+# Also installs the bundled rdsh plugins (rdsh settings UI) so they are
+# available by default.
 # Usage: [PROFILE=headless] [DRY_RUN=1] ./plugins/install.sh
 set -u
 PROFILE="${PROFILE:-headless}"
@@ -22,6 +24,21 @@ for p in $PKGS; do
   else
     if dsh plugin --profile "$PROFILE" add "$p"; then
       echo "installed: $p"
+      ok=$((ok + 1))
+    else
+      echo "FAILED: $p" >&2
+      fail=$((fail + 1))
+    fi
+  fi
+done
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+for p in rdsh-settings; do
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "dsh plugin --profile $PROFILE add $REPO_ROOT/plugins/$p"
+    ok=$((ok + 1))
+  else
+    if dsh plugin --profile "$PROFILE" add "$REPO_ROOT/plugins/$p"; then
+      echo "installed: $p (bundled)"
       ok=$((ok + 1))
     else
       echo "FAILED: $p" >&2

@@ -22,6 +22,15 @@ PROFILE=web ./plugins/install.sh       # install into the web profile instead
 DRY_RUN=1 ./plugins/install.sh         # print the pnpm commands only
 ```
 
+## Bundled rdsh plugins (this repo)
+
+`./plugins/install.sh` also installs these local plugins into the same
+profile, so the rdsh settings UI is available by default:
+
+| Plugin | Why |
+| --- | --- |
+| `rdsh-settings` | rdsh section in DSH settings (budgets, retrieval, memory, beta flags) |
+
 ## Filesystem skills (rtk + ponytail)
 
 Install with `./plugins/install-skills.sh` (defaults to `~/.dsh/skills`).

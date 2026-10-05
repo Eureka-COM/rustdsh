@@ -10,12 +10,13 @@ window.__ModuleLoader__.load({
     const SAVE = '/api/rdsh-context/save';
     const GET_ALL = '/api/rdsh-settings';
     const SAVE_ALL = '/api/rdsh-settings/save';
-    const card = { border: '0.5px solid var(--dsw-alias-settings-card-stroke, rgba(128,128,128,.25))', background: 'var(--dsw-alias-settings-card-fill, transparent)', borderRadius: '12px', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px' };
-    const title = { margin: '0', fontSize: '16px', fontWeight: 500 };
-    const desc = { margin: '0', fontSize: '13px', opacity: 0.7 };
-    const label = { fontSize: '12px', fontWeight: 600, opacity: 0.75 };
-    const input = { font: 'inherit', fontSize: '13px', padding: '6px 8px', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,.35))', background: 'var(--dsw-alias-input-fill, transparent)', color: 'var(--dsw-alias-text, inherit)', width: '100%', boxSizing: 'border-box' };
-    const row = { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' };
+    const card = { border: '0.5px solid var(--dsw-alias-settings-card-stroke)', background: 'var(--dsw-alias-settings-card-fill)', borderRadius: '12px', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px', color: 'var(--dsw-alias-label-primary)' };
+    const title = { margin: '0', fontSize: '16px', fontWeight: 500, color: 'var(--dsw-alias-label-primary)' };
+    const desc = { margin: '0', fontSize: '13px', color: 'var(--dsw-alias-label-tertiary)' };
+    const label = { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary)' };
+    const input = { font: 'inherit', fontSize: '13px', padding: '6px 8px', borderRadius: '8px', width: '100%', boxSizing: 'border-box' };
+    const row = { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--dsw-alias-label-primary)' };
+    const cssText = '.rdsh-settings input,.rdsh-settings textarea,.rdsh-settings select{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3);outline:none}.rdsh-settings input:focus,.rdsh-settings textarea:focus,.rdsh-settings select:focus{box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));border-color:transparent}.rdsh-settings input::placeholder,.rdsh-settings textarea::placeholder{color:var(--dsw-alias-label-dimmed)}.rdsh-settings input[type=checkbox]{accent-color:var(--dsw-alias-button-primary-fill);width:15px;height:15px;background:none;border:none;padding:0}.rdsh-settings button{font:inherit}.rdsh-btn-pri{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border:none}.rdsh-btn-pri:hover{background:var(--dsw-alias-button-primary-hover)}.rdsh-btn-pri:disabled{opacity:.4;cursor:default}.rdsh-btn-sec{background:transparent;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.rdsh-btn-sec:hover{background:var(--dsw-alias-interactive-bg-hover)}.rdsh-btn-sec:disabled{opacity:.4;cursor:default}.rdsh-msg{font-size:12px;color:var(--dsw-alias-label-secondary)}';
     const grid2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' };
     function toLines(v) { return Array.isArray(v) ? v.join('\n') : ''; }
     function fromLines(s) { return String(s || '').split('\n').map((x) => x.trim()).filter((x) => x !== ''); }
@@ -80,7 +81,8 @@ window.__ModuleLoader__.load({
       const co = sec('compact'); const ss = sec('sessions'); const lg = sec('logs');
       const svv = sec('serve'); const gu = sec('guard'); const be = sec('bench');
       const su = sec('setup'); const bt = sec('beta'); const cx = sec('context');
-      return h('div', { style: { maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 12 } },
+      return h('div', { className: 'rdsh-settings', style: { maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 12 } },
+        h('style', null, cssText),
         h('div', { style: card },
           h('p', { style: title }, 'rdsh context engine (テスト実装)'),
           h('p', { style: desc }, '毎ターン必要な文脈だけ再構成します。全文履歴は渡しません。設定は rdsh-context.json に保存され、rdsh context コマンドと共有されます。'),
@@ -103,9 +105,9 @@ window.__ModuleLoader__.load({
           h('div', null, h('div', { style: label }, '制約 (1行1件)'), h('textarea', { value: toLines(cfg.constraints), rows: 3, onChange: (e) => set('constraints', fromLines(e.target.value)), style: { ...input, minHeight: 56 } }))
         ),
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
-          h('button', { onClick: save, disabled: saving, style: { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,.35))', background: 'var(--dsw-alias-button-primary-fill, #0a84ff)', color: '#fff', cursor: 'pointer', fontSize: 14 } }, saving ? '保存中…' : '保存する'),
-          h('button', { onClick: load, disabled: saving, style: { padding: '8px 12px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,.35))', background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 13 } }, '再読み込み'),
-          h('span', { style: { fontSize: 12, opacity: 0.7 } }, msg)),
+          h('button', { className: 'rdsh-btn-pri', onClick: save, disabled: saving, style: { padding: '8px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, saving ? '保存中…' : '保存する'),
+          h('button', { className: 'rdsh-btn-sec', onClick: load, disabled: saving, style: { padding: '8px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13 } }, '再読み込み'),
+          h('span', { className: 'rdsh-msg' }, msg)),
         h('div', { style: card },
           h('p', { style: title }, '全体設定 (rdsh.json)'),
           h('p', { style: desc }, 'rdsh 全体の動作を切り替えます。保存先は rdsh.json です。'),
@@ -162,8 +164,8 @@ window.__ModuleLoader__.load({
           h('div', null, h('div', { style: label }, '制約 (1行1件)'), h('textarea', { value: toLines(cx.constraints), rows: 3, onChange: (e) => setPath('context', 'constraints', fromLines(e.target.value)), style: { ...input, minHeight: 56 } }))
         ),
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
-          h('button', { onClick: saveAll, disabled: savingAll, style: { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,.35))', background: 'var(--dsw-alias-button-primary-fill, #0a84ff)', color: '#fff', cursor: 'pointer', fontSize: 14 } }, savingAll ? '保存中…' : '全体設定を保存する'),
-          h('span', { style: { fontSize: 12, opacity: 0.7 } }, msgAll))
+          h('button', { className: 'rdsh-btn-pri', onClick: saveAll, disabled: savingAll, style: { padding: '8px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 14 } }, savingAll ? '保存中…' : '全体設定を保存する'),
+          h('span', { className: 'rdsh-msg' }, msgAll))
       );
     }
     return {
