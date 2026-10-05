@@ -236,6 +236,7 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
       task_id: "T1", expected_version: 0, purpose: "MCP 2 test",
       repository: project.root, allowed_scope: "Read only", write_roots: [],
       forbidden_actions: ["No writes"], completion_conditions: ["Test passes"],
+      operation_policy: { schema: 1, read_roots: [project.root], executables: [], network_origins: [] },
       change_reason: "Initial contract",
     }),
   });
@@ -250,6 +251,26 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   });
   assert.equal(JSON.parse(policyChecked.content[0].text).decision, "block");
   assert.equal(JSON.parse(policyChecked.content[0].text).execution, "hold");
+  await fs.writeFile(path.join(project.root, "read-fixture.txt"), "isolated fixture");
+  const approvalBound = { task_id: "T1", contract_version: 1, repository: project.root,
+    run_id: "mcp2-run", command_id: "mcp2-command",
+    operation: { schema: "rdsh.operation.v1", tool_name: "file.read", tool_input: { cwd: project.root, path: "read-fixture.txt" } } };
+  const requested = await request("tools/call", { name: "dashboard_request_approval", arguments: {
+    ...approvalBound, id: "mcp2-request", expected_version: 0, source_ref: "fixture:mcp2-command",
+    expires_at: new Date(Date.now() + 60000).toISOString(), limits: { max_cost_usd: 0, max_attempts: 1 },
+  } });
+  assert.equal(JSON.parse(requested.content[0].text).status, "pending");
+  const approvalUse = { ...approvalBound, id: "mcp2-request", request_version: 1, cost_usd: 0, attempt: 1 };
+  const approvalPending = await request("tools/call", { name: "dashboard_check_approval", arguments: approvalUse });
+  assert.equal(JSON.parse(approvalPending.content[0].text).reason, "approval_pending");
+  const decision = await fetch(dashboard.localUrl + "api/approvals/decide", {
+    method: "POST", headers: { "content-type": "application/json", "x-rdsh-browser-token": new URL(runtime.browser_url).hash.slice(5) },
+    body: JSON.stringify({ id: "mcp2-request", request_version: 1, decision: "grant" }),
+  });
+  assert.equal(decision.status, 200);
+  const claimed = await request("tools/call", { name: "dashboard_claim_approval", arguments: approvalUse });
+  assert.equal(JSON.parse(claimed.content[0].text).reservation, "reserved");
+  assert.equal(JSON.parse(claimed.content[0].text).execution, "hold");
   const subscription = {
     name: "dashboard.answer.created",
     arguments: { project_id: project.id },

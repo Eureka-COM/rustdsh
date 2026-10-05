@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { prepareContract } from "./contracts.mjs";
 import { evaluateOperation } from "./policy.mjs";
+import { prepareApprovalRequest, decideApproval, claimApproval, checkApproval } from "./approvals.mjs";
 
 export const metricNames = [
   "total_cost_usd",
@@ -96,6 +97,22 @@ export class ProjectStore {
         next.contracts.push(history);
       }
       history.versions.push(version);
+    } else if (operation === "approval_request") {
+      const version = await prepareApprovalRequest(next, input);
+      next.approval_requests ||= [];
+      let history = next.approval_requests.find((item) => item.id === input.id);
+      if (!history) {
+        history = { id: input.id, versions: [] };
+        next.approval_requests.push(history);
+      }
+      history.versions.push(version);
+    } else if (operation === "approval_decision") {
+      decideApproval(next, input, authority);
+    } else if (["approval_claim", "approval_check"].includes(operation)) {
+      const result = operation === "approval_claim" ? await claimApproval(next, input) : await checkApproval(next, input);
+      next.approval_checks ||= [];
+      next.approval_checks.push({ checked_at: new Date().toISOString(), ...result });
+      next.approval_checks = next.approval_checks.slice(-1000);
     } else if (operation === "policy") {
       const result = await evaluateOperation(next, input);
       next.policy_checks ||= [];
@@ -116,6 +133,10 @@ export class ProjectStore {
       metrics: "dashboard.metrics.updated",
       contract: "dashboard.contract.updated",
       policy: "dashboard.policy.checked",
+      approval_request: "dashboard.approval.requested",
+      approval_decision: "dashboard.approval.decided",
+      approval_claim: "dashboard.approval.claimed",
+      approval_check: "dashboard.approval.checked",
     };
     const summary =
       operation === "answer"
@@ -126,7 +147,9 @@ export class ProjectStore {
             ? "タスク契約を更新"
             : operation === "policy"
               ? "操作構造を照合"
-              : input.title || "指標を更新";
+              : operation.startsWith("approval_")
+                ? "操作承認の台帳を更新"
+                : input.title || "指標を更新";
     next.changes ||= [];
     next.changes.push({
       eventId: `evt_${this.project.id}_${next.revision}`,

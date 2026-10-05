@@ -91,7 +91,8 @@ export async function startDashboard(options) {
   const sockets = new Set();
   const modern = store
     ? modernMcpHandler(
-        { getState: async () => publicState(store.value), mutate, checkContract: preflight, checkOperation: policyCheck },
+        { getState: async () => publicState(store.value), mutate, checkContract: preflight, checkOperation: policyCheck,
+          requestApproval, checkApproval: approvalCheck, claimApproval: approvalClaim },
         eventsHub,
       )
     : null;
@@ -219,6 +220,18 @@ export async function startDashboard(options) {
     const state = await mutate("policy", input);
     return state.policy_checks.at(-1);
   }
+  async function requestApproval(input) {
+    const state = await mutate("approval_request", input);
+    return { id: input.id, ...state.approval_requests.find((item) => item.id === input.id).versions.at(-1) };
+  }
+  async function approvalCheck(input) {
+    const state = await mutate("approval_check", input);
+    return state.approval_checks.at(-1);
+  }
+  async function approvalClaim(input) {
+    const state = await mutate("approval_claim", input);
+    return state.approval_checks.at(-1);
+  }
   const server = http.createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
     res.setHeader("referrer-policy", "no-referrer");
@@ -245,6 +258,7 @@ export async function startDashboard(options) {
         : null;
       const adminAuthorized = equal(req.headers.authorization, `Bearer ${token}`);
       const agentRoute = route === "/mcp" || route === "/api/state" || route === "/api/contracts/check" || route === "/api/policy/check" ||
+        ["request", "check", "claim"].some((operation) => route === `/api/approvals/${operation}`) ||
         (req.method === "POST" && ["metrics", "task", "question", "event"].some((operation) => route === `/api/update/${operation}`));
       const mcpAuthorized = kind === "project" && agentRoute && equal(req.headers.authorization, `Bearer ${mcpToken}`);
       const humanAuthorized = browserAuthorized(req, url, route);
@@ -328,9 +342,19 @@ export async function startDashboard(options) {
           const result = await policyCheck(await readBody(req));
           return json(res, result.decision === "within_policy" ? 200 : 409, result);
         }
+        if (req.method === "POST" && route === "/api/approvals/request")
+          return json(res, 200, await requestApproval(await readBody(req)));
+        if (req.method === "POST" && ["/api/approvals/check", "/api/approvals/claim"].includes(route)) {
+          const result = await (route.endsWith("claim") ? approvalClaim : approvalCheck)(await readBody(req));
+          return json(res, result.decision === "approval_valid" ? 200 : 409, result);
+        }
+        if (req.method === "POST" && route === "/api/approvals/decide") {
+          if (!humanAuthorized) return json(res, 403, { error: "Human browser credential required" });
+          return json(res, 200, await mutate("approval_decision", await readBody(req), "human_browser"));
+        }
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
-          if (["contract", "policy"].includes(operation))
+          if (["contract", "policy", "approval_request", "approval_decision", "approval_check", "approval_claim"].includes(operation))
             return json(res, 403, { error: "Use the administrator contract endpoint" });
           if (operation === "answer" ? !humanAuthorized : !(mcpAuthorized || adminAuthorized))
             return json(res, 403, { error: "This credential cannot perform that operation" });
@@ -373,6 +397,9 @@ export async function startDashboard(options) {
               mutate,
               checkContract: preflight,
               checkOperation: policyCheck,
+              requestApproval,
+              checkApproval: approvalCheck,
+              claimApproval: approvalClaim,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,

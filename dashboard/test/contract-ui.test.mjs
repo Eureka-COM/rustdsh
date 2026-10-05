@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
-test("task rows display current and historical contracts as literal text", async () => {
+test("contracts and approval scopes render as literal text; human choices bind request version", async () => {
   class Element {
     constructor(tag) {
       this.tag = tag;
@@ -16,7 +16,7 @@ test("task rows display current and historical contracts as literal text", async
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
     setAttribute() {}
-    addEventListener() {}
+    addEventListener(event, listener) { (this.listeners ||= {})[event] = listener; }
     querySelectorAll() { return []; }
   }
   const elements = new Map();
@@ -38,20 +38,33 @@ test("task rows display current and historical contracts as literal text", async
     metrics: {}, tasks: [{ id: "T1", title: "Test", status: "todo", blocker: "" }, { id: "T2", title: "Legacy task", status: "todo", blocker: "" }],
     questions: [], events: [], updated_at: null,
     contracts: [{ task_id: "T1", versions: [version, { ...version, version: 2, write_roots: [], change_reason: "Read only" }] }],
+    approval_requests: [{ id: "R1", versions: [{
+      version: 3, status: "pending", task_id: "T1", contract_version: 2,
+      run_id: "run-ui", command_id: "command-ui", attributes: { tool: "file.write", path: "/fixture/src/new.txt" },
+      operation_digest: "fixture-digest", limits: { max_cost_usd: 2, max_attempts: 1 },
+      expires_at: "2026-10-06T00:00:00.000Z", source_ref: unsafe, uses: [], reserved_cost_microusd: 0,
+    }] }],
   };
+  const decisions = [];
   const source = await fs.readFile(new URL("../app.mjs", import.meta.url), "utf8");
   await vm.runInNewContext(`(async () => {\n${source}\n})()`, {
     document, location: { pathname: "/", search: "", hash: "" },
     sessionStorage: { getItem: () => null, setItem() {} }, history: { replaceState() {} },
     URL, URLSearchParams,
     EventSource: class { addEventListener() {} },
-    fetch: async (route) => ({
+    fetch: async (route, options) => {
+      if (route.endsWith("approvals/decide")) {
+        decisions.push(JSON.parse(options.body));
+        state.approval_requests[0].versions[0].status = decisions.at(-1).decision === "grant" ? "granted" : "revoked";
+      }
+      return {
       ok: true,
       json: async () => route.endsWith("config") ? {
         kind: "project", project: { name: "Test", root: "/fixture" },
         share: { state: "disabled", message: "Local fixture", url: null },
       } : state,
-    }),
+      };
+    },
   });
   const descendants = (element) => [element, ...element.children.flatMap(descendants)];
   const nodes = descendants(elements.get("tasks"));
@@ -65,4 +78,13 @@ test("task rows display current and historical contracts as literal text", async
   assert.ok(labels.includes("終了条件: Tests pass"));
   assert.ok(labels.includes("変更理由: Read only"));
   assert.ok(nodes.every((node) => node.tag !== "img" && node.tag !== "script"));
+  let approvals = descendants(elements.get("approvals"));
+  assert.ok(approvals.some((node) => node.textContent === "元要求: " + unsafe));
+  assert.ok(approvals.some((node) => node.textContent === "run / command: run-ui / command-ui"));
+  assert.ok(approvals.every((node) => node.tag !== "img" && node.tag !== "script"));
+  await approvals.find((node) => node.tag === "button" && node.textContent === "この操作範囲を承認").listeners.click();
+  assert.deepEqual(decisions, [{ id: "R1", request_version: 3, decision: "grant" }]);
+  approvals = descendants(elements.get("approvals"));
+  await approvals.find((node) => node.tag === "button" && node.textContent === "承認を取り消す").listeners.click();
+  assert.deepEqual(decisions[1], { id: "R1", request_version: 3, decision: "revoke" });
 });

@@ -344,6 +344,23 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   const stdioPolicy = await stdio.callTool({ name: "dashboard_check_operation", arguments: policyInput });
   assert.notEqual(stdioPolicy.isError, true);
   assert.equal(JSON.parse(stdioPolicy.content[0].text).operation_digest, policyResult.operation_digest);
+  const approvalBound = { ...policyInput, run_id: "integration-run", command_id: "integration-command" };
+  const approvalRequest = { ...approvalBound, id: "integration-approval", expected_version: 0,
+    source_ref: "fixture:integration-command", expires_at: new Date(Date.now() + 60000).toISOString(),
+    limits: { max_cost_usd: 1, max_attempts: 1 } };
+  const requested = await stdio.callTool({ name: "dashboard_request_approval", arguments: approvalRequest });
+  assert.notEqual(requested.isError, true);
+  assert.equal(JSON.parse(requested.content[0].text).status, "pending");
+  const approvalUse = { ...approvalBound, id: approvalRequest.id, request_version: 1, attempt: 1, cost_usd: 0.5 };
+  assert.equal((await call("dashboard_check_approval", approvalUse)).reason, "approval_pending");
+  assert.equal((await contractRequest(browserHeaders,
+    { id: approvalRequest.id, request_version: 1, decision: "grant" }, "approvals/decide")).status, 200);
+  const claimed = await call("dashboard_claim_approval", approvalUse);
+  assert.equal(claimed.reservation, "reserved");
+  assert.equal(claimed.execution, "hold");
+  const replay = await stdio.callTool({ name: "dashboard_claim_approval", arguments: approvalUse });
+  assert.notEqual(replay.isError, true);
+  assert.equal(JSON.parse(replay.content[0].text).reason, "approval_retry_limit_or_replay");
   const contractFile = path.join(temporary, "contract.json");
   await fs.writeFile(contractFile, JSON.stringify({ ...contractInput, expected_version: 2, purpose: "CLI revision" }));
   const runContractCli = () => promisify(execFile)(process.execPath, [

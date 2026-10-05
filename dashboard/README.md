@@ -4,7 +4,7 @@
 
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| `project` | Project metrics, tasks, questions, human answers, progress | Eight project-scoped MCP tools                   |
+| `project` | Project metrics, tasks, questions, human answers, progress | Eleven project-scoped MCP tools                  |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -98,6 +98,9 @@ configuration after a restart, because the bearer key rotates.
 | `dashboard_get_state`      | Read this project's current state            |
 | `dashboard_check_task_contract` | Preflight declared repo/cwd/write paths against a versioned task contract |
 | `dashboard_check_operation` | Parse/audit explicit tool attributes; keep execution on hold |
+| `dashboard_request_approval` | Create a pending request bound to one operation and its limits |
+| `dashboard_check_approval` | Match a human grant to the current operation and next attempt |
+| `dashboard_claim_approval` | Atomically reserve one approved attempt and declared cost |
 
 Example tool arguments:
 
@@ -177,7 +180,8 @@ MCP contract mutation tool. This is the existing single-owner credential boundar
 not proof of a particular human's identity. A process running as the same OS user
 may still read the private runtime file. Each change marks previous approvals as
 requiring revalidation; no answer is converted to an execution approval. The
-approval ledger and actual reuse/retry rules remain Issue #30 work.
+approval ledger below implements declared scope/retry matching; execution adapter
+integration remains required.
 
 Before an operation, call `dashboard_check_task_contract` with:
 
@@ -260,6 +264,58 @@ structure as the decision, and enforcement as `not_applied`. No declared command
 or network operation is executed. Automatic CLI tool interception, shell
 semantics, dynamic subprocess effects and OS enforcement remain unconnected.
 
+### Approval ledger (Issue #30 foundation)
+
+General question answers remain feedback. They never grant operation approval.
+Create a request with `dashboard_request_approval` or `POST /api/approvals/request`:
+
+```json
+{
+  "id": "request-1", "expected_version": 0,
+  "task_id": "M3.6", "contract_version": 1, "repository": "/path/to/repo",
+  "run_id": "run-1", "command_id": "command-1",
+  "operation": {
+    "schema": "rdsh.operation.v1", "tool_name": "file.write",
+    "tool_input": {"cwd": "/path/to/repo", "path": "src/new.txt", "content": "fixture"}
+  },
+  "limits": {"max_cost_usd": 1, "max_attempts": 2},
+  "expires_at": "2026-10-06T00:00:00.000Z",
+  "source_ref": "request-artifact:command-1"
+}
+```
+
+Replace the example expiry with a future UTC ISO timestamp within seven days.
+Only an operation already within the current structured policy can be requested.
+Each request version records project/task/contract, run/command, resolved target,
+operation/data digest, limits, expiry and a reference to the original request.
+The reference is untrusted display data; inspect the original request before
+granting. Raw operation bodies, URL queries and argv values are not copied to the
+ledger. Revisions require `expected_version` and always start pending; old versions
+remain readable and their grants cannot authorize the new version.
+
+Use the browser's dedicated approval buttons to grant, reject or revoke that
+request version. Only the human browser credential can call
+`POST /api/approvals/decide` with `id`, `request_version`, `decision`.
+MCP and administrator credentials cannot grant approval; generic update routes
+cannot bypass this boundary. The approver is the authenticated `dashboard_owner`
+role, not a claim of a named person's identity. Decision history is retained.
+
+Check or claim with the same task/repository/run/command/operation plus `id`,
+`request_version`, `attempt` (starting at one) and `cost_usd`. A check reserves
+nothing. A claim serializes revalidation and reservation: only the next attempt
+within `max_attempts` and the cumulative declared cost is accepted. Costs have
+micro-dollar precision and are declarations, not measured billing. Changed
+scope/data/context, expired/revoked/rejected/pending requests and replayed attempts
+fail closed. Use a new request version and obtain a new grant for changed limits
+or operation data. Latest checks and all request versions survive restart.
+
+HTTP check/claim returns 200 for `approval_valid`, otherwise 409; MCP returns the
+same structured result. A valid reservation **still returns `execution: hold`**
+and `enforcement: not_applied`; its use record is `execution: not_started`.
+There is no operation execution, automatic refund, billing integration or DSH
+tool interception. An enforcing execution adapter must perform a fresh check and
+bind actual effects/cost before this ledger can grant effective permissions.
+
 ## OpenAI ChatGPT Dots and MCP Events
 
 The project HTTP `/mcp` endpoint implements MCP 2.0 (`2026-07-28`) discovery and
@@ -273,6 +329,10 @@ project bearer authentication used for tools. Available events:
 - `dashboard.metrics.updated`
 - `dashboard.contract.updated`
 - `dashboard.policy.checked`
+- `dashboard.approval.requested`
+- `dashboard.approval.decided`
+- `dashboard.approval.checked`
+- `dashboard.approval.claimed`
 
 Each requires the project's `project_id` filter. Subscribe to
 `dashboard.answer.created` when a Dot should react to human replies, then retrieve

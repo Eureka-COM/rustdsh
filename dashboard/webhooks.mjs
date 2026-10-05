@@ -77,6 +77,10 @@ const names = [
   "dashboard.metrics.updated",
   "dashboard.contract.updated",
   "dashboard.policy.checked",
+  "dashboard.approval.requested",
+  "dashboard.approval.decided",
+  "dashboard.approval.checked",
+  "dashboard.approval.claimed",
 ];
 export const eventDefinitions = names.map((name) => ({
   name,

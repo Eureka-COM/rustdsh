@@ -19,6 +19,17 @@ const object = (properties, required = []) => ({
   required,
   additionalProperties: false,
 });
+const operationSchema = object({
+  schema: { const: "rdsh.operation.v1" },
+  tool_name: { enum: ["file.read", "file.write", "process.exec", "network.request"] },
+  tool_input: { type: "object" },
+}, ["schema", "tool_name", "tool_input"]);
+const boundOperation = { task_id: string, contract_version: { type: "integer", minimum: 1 }, repository: string, operation: operationSchema };
+const approvalUseSchema = object({
+  ...boundOperation, id: string, request_version: { type: "integer", minimum: 1 },
+  run_id: string, command_id: string, attempt: { type: "integer", minimum: 1 },
+  cost_usd: { type: "number", minimum: 0, maximum: 1000000 },
+}, ["id", "request_version", "task_id", "contract_version", "repository", "run_id", "command_id", "operation", "attempt", "cost_usd"]);
 export const tools = [
   {
     name: "dashboard_update_metrics",
@@ -114,6 +125,25 @@ export const tools = [
       }, ["schema", "tool_name", "tool_input"]),
     }, ["task_id", "contract_version", "repository", "operation"]),
   },
+  {
+    name: "dashboard_request_approval",
+    description: "Create a pending versioned approval request bound to the current parsed operation, run, command, cost/retry limits and expiry. This cannot grant human approval. Raw bodies, URL queries and argv values are represented by digests.",
+    inputSchema: object({
+      ...boundOperation, id: string, expected_version: { type: "integer", minimum: 0 },
+      run_id: string, command_id: string, source_ref: string, expires_at: string,
+      limits: object({ max_cost_usd: { type: "number", minimum: 0, maximum: 1000000 }, max_attempts: { type: "integer", minimum: 1, maximum: 10 } }, ["max_cost_usd", "max_attempts"]),
+    }, ["id", "expected_version", "task_id", "contract_version", "repository", "run_id", "command_id", "source_ref", "expires_at", "limits", "operation"]),
+  },
+  {
+    name: "dashboard_check_approval",
+    description: "Check an existing human approval against the exact current operation and next retry/cost reservation. This does not reserve an attempt or execute anything; execution remains on hold without enforcement.",
+    inputSchema: approvalUseSchema,
+  },
+  {
+    name: "dashboard_claim_approval",
+    description: "Atomically reserve one approved attempt and declared cost. Prevents duplicate/replayed reservations. It does not execute the operation or prove billing/enforcement; execution remains on hold.",
+    inputSchema: approvalUseSchema,
+  },
 ];
 const routes = {
   dashboard_update_metrics: "metrics",
@@ -125,6 +155,9 @@ export async function executeTool(api, name, args = {}) {
   if (name === "dashboard_get_state") return await api.getState();
   if (name === "dashboard_check_task_contract") return await api.checkContract(args);
   if (name === "dashboard_check_operation") return await api.checkOperation(args);
+  if (name === "dashboard_request_approval") return await api.requestApproval(args);
+  if (name === "dashboard_check_approval") return await api.checkApproval(args);
+  if (name === "dashboard_claim_approval") return await api.claimApproval(args);
   if (name === "dashboard_get_feedback")
     return feedbackSince(await api.getState(), args.after ?? 0);
   if (routes[name]) {
@@ -234,7 +267,7 @@ export async function runStdio(project) {
       signal: AbortSignal.timeout(10000),
     });
     const result = await response.json();
-    if (!response.ok && !(["api/contracts/check", "api/policy/check"].includes(route) && response.status === 409))
+    if (!response.ok && !(["api/contracts/check", "api/policy/check", "api/approvals/check", "api/approvals/claim"].includes(route) && response.status === 409))
       throw new Error(result.error || `HTTP ${response.status}`);
     return result;
   }
@@ -243,6 +276,9 @@ export async function runStdio(project) {
     mutate: (operation, input) => request(`api/update/${operation}`, input),
     checkContract: (input) => request("api/contracts/check", input),
     checkOperation: (input) => request("api/policy/check", input),
+    requestApproval: (input) => request("api/approvals/request", input),
+    checkApproval: (input) => request("api/approvals/check", input),
+    claimApproval: (input) => request("api/approvals/claim", input),
   });
   await mcp.server.connect(new StdioServerTransport());
   // Resource subscribers receive change notifications; disconnected clients can recover with cursors.
