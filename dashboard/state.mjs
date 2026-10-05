@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
+// Bucket D display notes (no schema change; schema stays 1):
+// #12 task contract, #13 review inbox, #14 outcome cards, #15 dependencies.
+// Field shapes below are frozen; only comments and wording may change here.
+
 export const metricNames = [
   "total_cost_usd",
   "total_budget_usd",
@@ -174,6 +178,12 @@ export function applyOperation(state, operation, input) {
       break;
     }
     case "task": {
+      // #12 task contract (display-only): title holds the purpose, the project
+      // root/id holds the target repo, and status/milestone/blocker hold the
+      // exit conditions. This store never grants action approval; callers
+      // must check the active revision before starting work. Schema frozen.
+      // #14 outcome card: keep title/status/milestone/blocker/updated_at on
+      // one card; "done" is not "verified" until a check result is recorded.
       const task = {
         id: text(input.id, "id", 160),
         title: text(input.title, "title", 1000),
@@ -194,6 +204,9 @@ export function applyOperation(state, operation, input) {
       break;
     }
     case "question": {
+      // #13 review inbox: the inbox shows only answer === null, ordered by
+      // urgency then created_at. Plain event/metrics appends must not raise
+      // warnings there; answering removes the item but keeps this history.
       const question = {
         id: text(input.id, "id", 160),
         question: text(input.question, "question"),
@@ -216,6 +229,9 @@ export function applyOperation(state, operation, input) {
       break;
     }
     case "answer": {
+      // #13 review inbox (cont.): an answer keeps the original question in
+      // feedback and drops it from the pending inbox; duplicates by id stay
+      // rejected so follow-ups need a new id.
       const question = state.questions.find((item) => item.id === input.id);
       if (!question) throw new Error("Question not found");
       if (question.answer !== null)
@@ -247,6 +263,9 @@ export function applyOperation(state, operation, input) {
       };
       state.events.push(event);
       // Full state and all feedback are durable; retain the latest 1000 display events.
+      // #15 dependencies (display-only): no DAG/claim fields in schema 1 by
+      // design. The UI collapses large graphs and shows only runnable items;
+      // concurrency/depth/stop limits are enforced by the caller's plan.
       state.events = state.events.slice(-1000);
       break;
     }
