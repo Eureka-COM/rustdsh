@@ -271,10 +271,9 @@ pub fn exec_boot(
     slim: bool,
 ) -> anyhow::Result<()> {
     if !dry {
-        crate::auth::auto_sync();
-        // First boot with no model credential: say the exact next step
-        // instead of letting dsh open with a bare DeepSeek prompt.
-        crate::auth::first_boot_banner();
+        // One credential scan drives both the mirror import and the
+        // first-boot banner decision.
+        crate::auth::pre_boot(true);
     }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
@@ -304,7 +303,7 @@ pub fn exec_dump_config(
     slim: bool,
 ) -> anyhow::Result<()> {
     if !dry {
-        crate::auth::auto_sync();
+        crate::auth::pre_boot(false);
     }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
@@ -323,8 +322,7 @@ pub fn exec_raw(args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
     // Same first-boot guidance as exec_boot: `dsh` (shadowed) is the usual
     // first thing a newcomer runs.
     if !dry {
-        crate::auth::auto_sync();
-        crate::auth::first_boot_banner();
+        crate::auth::pre_boot(true);
     }
     let orig = find_original_dsh().ok_or_else(|| {
         anyhow::anyhow!("original dsh not found (set DSH_ORIG_BIN or reinstall with install.sh)")
@@ -342,7 +340,7 @@ pub fn exec_plugin(
     slim: bool,
 ) -> anyhow::Result<()> {
     if !dry {
-        crate::auth::auto_sync();
+        crate::auth::pre_boot(false);
     }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
