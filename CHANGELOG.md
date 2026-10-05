@@ -6,6 +6,7 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+
 - GitHub community health: Code of Conduct, Security/Support policy,
   issue forms, PR template, Dependabot, docs set.
 - Docs: ARCHITECTURE / BENCHMARKS / ROADMAP / RELEASING guides.
@@ -13,6 +14,7 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 ## [0.1.3] - 2026-10-05
 
 ### Added
+
 - Context engine prototype: `rdsh context build/search/status/explain`
   rebuilds per-turn context from local files (no vector DB).
 - Unified settings: `rdsh settings show/path/init` backed by
