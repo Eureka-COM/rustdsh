@@ -233,6 +233,9 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     cwd: alpha.root, write_paths: ["new-test-file"],
   };
   assert.equal((await call("dashboard_check_task_contract", preflight)).decision, "within_scope");
+  assert.equal((await contractRequest({}, preflight, "contracts/check")).status, 401);
+  for (const credential of [headers, agentHeaders, browserHeaders])
+    assert.equal((await contractRequest(credential, preflight, "contracts/check")).status, 200);
   assert.equal((await call("dashboard_check_task_contract", { ...preflight, cwd: beta.root })).decision, "block");
   const beforeCheck = dashboard.store.value.revision;
   const deniedCheck = await contractRequest(agentHeaders, { ...preflight, repository: beta.root }, "contracts/check");

@@ -175,6 +175,12 @@ current version and its history. MCP clients read the same history with
 `dashboard_get_state`, including after restart. Existing schema-1 state remains
 readable; tasks without contracts are shown as unset and preflight blocks them.
 
+Contract versions are retained without a count limit and each update rewrites the
+state file. Large histories increase storage and update cost. Automatic truncation
+would discard the required scope-change audit; plan an archival/migration design
+before adopting frequent contract revisions. Approval request/decision histories
+are also retained without automatic truncation; recent check logs are bounded.
+
 Only `POST /api/contracts/update` with the local administrator bearer credential
 can save a contract. Browser and MCP credentials cannot change it; there is no
 MCP contract mutation tool. This is the existing single-owner credential boundary,
@@ -200,6 +206,9 @@ The corresponding HTTP endpoint is `POST /api/contracts/check`. `within_scope`
 (HTTP 200) means only that these declared paths passed preflight. `block` or
 `unparsed` (HTTP 409) must stop the caller. The stdio and HTTP MCP routes return
 the same structured decision. Checks do not write state or read file contents.
+The read-only check intentionally accepts administrator, MCP and human browser
+project credentials, matching access to project state; unauthenticated requests
+are rejected. Browser access does not grant contract mutation or operation execution.
 They require the active version and project repository, check cwd containment,
 and check both lexical and resolved write destinations. Empty `write_roots` means
 no writes. Roots must exist when saved; a new write leaf may be absent. Escaping,

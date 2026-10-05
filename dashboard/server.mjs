@@ -341,6 +341,8 @@ export async function startDashboard(options) {
           return json(res, 200, await mutate("contract", await readBody(req), "local_administrator"));
         }
         if (req.method === "POST" && route === "/api/contracts/check") {
+          if (!(adminAuthorized || mcpAuthorized || humanAuthorized))
+            return json(res, 403, { error: "Project credential required" });
           const result = await preflight(await readBody(req));
           return json(res, result.decision === "within_scope" ? 200 : 409, result);
         }

@@ -221,7 +221,9 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   const discovery = await request("server/discover");
   assert.ok(discovery.supportedVersions.includes("2026-07-28"));
   assert.deepEqual(discovery.capabilities.events, {});
-  assert.ok((await request("events/list")).events.some((event) => event.name === "dashboard.contract.updated"));
+  const discoveredEvents = (await request("events/list")).events;
+  assert.ok(discoveredEvents.some((event) => event.name === "dashboard.contract.updated"));
+  assert.ok(discoveredEvents.every((event) => typeof event.description === "string" && event.description.length > 0));
   assert.ok((await request("tools/list")).tools.some((tool) => tool.name === "dashboard_check_task_contract"));
   const result = await request("tools/call", {
     name: "dashboard_upsert_task",

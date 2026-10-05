@@ -93,6 +93,12 @@ export const eventDefinitions = names.map((name) => ({
     "dashboard.progress.updated":
       "New progress or an artifact reference was reported.",
     "dashboard.metrics.updated": "Measured project metrics were updated.",
+    "dashboard.contract.updated": "A versioned task contract changed; revalidate prior approvals.",
+    "dashboard.policy.checked": "A declared operation was structurally checked; execution remains held.",
+    "dashboard.approval.requested": "A pending scoped approval request was created or revised.",
+    "dashboard.approval.decided": "The dashboard owner granted, rejected or revoked an approval request.",
+    "dashboard.approval.checked": "An approval was matched against a declared operation; no attempt was reserved.",
+    "dashboard.approval.claimed": "An approval reservation was checked; retrieve state for the result. No operation was executed.",
   }[name],
   delivery: ["webhook"],
   inputSchema: {

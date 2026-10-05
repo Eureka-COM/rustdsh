@@ -76,9 +76,15 @@ try {
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(15000),
     });
-    const state = await response.json();
-    if (!response.ok) throw new Error(state.error || `HTTP ${response.status}`);
-    const version = state.contracts.find((item) => item.task_id === input.task_id).versions.at(-1).version;
+    let state;
+    try { state = await response.json(); }
+    catch { throw new Error("Dashboard returned an invalid contract response; verify saved state before retrying"); }
+    if (!response.ok) throw new Error(typeof state?.error === "string" ? state.error : `HTTP ${response.status}`);
+    const history = Array.isArray(state?.contracts)
+      ? state.contracts.find((item) => item?.task_id === input.task_id) : null;
+    const version = Array.isArray(history?.versions) ? history.versions.at(-1)?.version : null;
+    if (!Number.isSafeInteger(version) || version < 1)
+      throw new Error("Dashboard response is missing the saved contract version; verify saved state before retrying");
     console.log(`[rdsh-dashboard] Task contract saved: v${version}; prior approvals require revalidation`);
   } else if (["open", "stop", "revoke-events"].includes(command)) {
     const project = values.harness

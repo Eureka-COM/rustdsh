@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { ProjectStore } from "../state.mjs";
 import { checkWorkerStart } from "../enforcement.mjs";
+import { checkContract } from "../contracts.mjs";
 
 test("unsupported workers show distinct requested permissions without starting or widening access", async (t) => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-enforcement-test-"));
@@ -15,6 +16,7 @@ test("unsupported workers show distinct requested permissions without starting o
   await fs.writeFile(beforeFile, "unchanged isolated fixture");
   const outsideFile = path.join(temp, "outside.txt");
   await fs.writeFile(outsideFile, "outside fixture");
+  await fs.link(outsideFile, path.join(root, "hardlink-alias.txt"));
   const project = { id: "enforcement-test", root: await fs.realpath(root), name: "Fixture", directory: path.join(temp, "state") };
   const store = await ProjectStore.open(project);
   await store.mutate("task", { id: "T1", title: "Fixture", status: "todo" });
@@ -25,6 +27,10 @@ test("unsupported workers show distinct requested permissions without starting o
   }, "local_administrator");
   const input = { task_id: "T1", contract_version: 1, repository: project.root, run_id: "fixture-run", worker_role: "review" };
   const beforeState = structuredClone(store.value);
+  // A hardlink's canonical path does not reveal its external alias. Reproduce
+  // that preflight limitation; the worker gate must still refuse to start.
+  assert.equal((await checkContract(store.value, { task_id: "T1", contract_version: 1,
+    repository: project.root, cwd: project.root, write_paths: ["hardlink-alias.txt"] })).decision, "within_scope");
   const review = await checkWorkerStart(store.value, input);
   assert.equal(review.decision, "hold");
   assert.equal(review.reason, "enforcement_adapter_unavailable");
