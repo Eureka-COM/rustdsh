@@ -36,7 +36,7 @@ jobs:
             pkg: rdsh-windows-x64.zip
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -57,7 +57,7 @@ jobs:
       # Installers go up from the gnu Linux job only: same filenames from every
       # matrix job race on delete+re-upload, and Windows checkouts use CRLF.
       - if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ${{ matrix.pkg }}
@@ -66,7 +66,7 @@ jobs:
             install.ps1
           generate_release_notes: true
       - if: runner.os != 'Linux' || matrix.target != 'x86_64-unknown-linux-gnu'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ${{ matrix.pkg }}

@@ -43,7 +43,7 @@ to Rust and delegates everything else to the original `dsh` binary** — so you 
 Measured on Linux x86_64, including before/after comparisons for the optimizations.
 
 | Case | rdsh | Baseline | Factor |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `--version` startup (median, n=5) | ~0.90ms | original `dsh` ~88ms | ~98x |
 | `--version` peak RSS | ~2.9MB | original ~66MB | ~1/23 |
 | Hook-equivalent peak RSS | ~2.7MB | equivalent Node script ~45MB | ~1/16 |
@@ -94,7 +94,7 @@ cd rustdsh
 ```
 
 | OS | script | notes |
-|---|---|---|
+| --- | --- | --- |
 | Linux / macOS | `./install.sh` | needs `cargo` or `curl` (rustup auto-install) |
 | WSL | `./install.sh` inside the distro | detected automatically; alongside native via `install.ps1 -Wsl` |
 | Windows (native) | `.\install.ps1` | needs Rust (`winget install Rustlang.Rustup`); MSVC build tools required to compile |
@@ -244,7 +244,7 @@ rdsh serve
 ```
 
 | API | Purpose |
-|---|---|
+| --- | --- |
 | `GET /api/version` | version |
 | `GET /api/doctor` | health check |
 | `POST /api/tokens` | token estimate for `{"text"}` |
@@ -260,6 +260,16 @@ rdsh serve
 Which dashboard? `rdsh serve` is the quick local status page for this
 machine. For project metrics, human Q&A, and phone access, use the optional
 [Node.js dashboard](dashboard/README.md) instead.
+
+### Which dashboard should I use? (`rdsh serve` vs `dashboard/`)
+
+- Use `rdsh serve` for a quick local check of this machine
+  (version, doctor, tokens, sessions). No setup beyond the `rdsh` binary.
+- Use `dashboard/` for project work: metrics, tasks, human Q&A,
+  and phone access via Tailscale QR. It needs Node.js 22+.
+  See the [Node.js dashboard guide](dashboard/README.md).
+- If port 3080 is taken by the dsh web GUI, keep 3080 for dsh web
+  and run `rdsh serve --port 38080`.
 
 ### Private project dashboards and phone access
 
@@ -323,11 +333,13 @@ dumps, missing `--profile`) are reproduced in Rust.
 
 - Start with [CONTRIBUTING.md](CONTRIBUTING.md) (4-line PRs, screenshot rules).
 - Bugs and ideas: [issue forms](https://github.com/sahenjp/rustdsh/issues/new/choose) (Japanese OK).
-- Questions: [Discussions](https://github.com/sahenjp/rustdsh/discussions).
+- Questions: [Issues](https://github.com/sahenjp/rustdsh/issues).
 - Security: never file public issues — see [SECURITY.md](SECURITY.md).
 - Design docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md) · [docs/ROADMAP.md](docs/ROADMAP.md) ·
   [docs/RELEASING.md](docs/RELEASING.md) · [CHANGELOG.md](CHANGELOG.md).
+- Improvement index: [issue #74](https://github.com/sahenjp/rustdsh/issues/74)
+  maps all 72 proposals to feature issues with priority (P0-P3).
 - Be kind: [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Contributing

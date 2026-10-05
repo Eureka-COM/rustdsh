@@ -3,6 +3,9 @@
 # rebuild: it delegates by exec). Safe by default: verify after update,
 # roll back to the previous version on any failure.
 # Usage: sync-dsh.sh [--check-only] [--channel rc|any]  (default channel: rc)
+# Release checklist ref (Issue #7, docs only): after `cargo publish`, the new
+# rdsh release binary is picked up here on the next run (step 6); use
+# --check-only to preview without installing.
 # rdsh self-update prefers a prebuilt release binary; source builds run only with
 # RDSH_SYNC_FROM_SOURCE=1 (under nice/ionice). Regress always runs sandboxed.
 set -u

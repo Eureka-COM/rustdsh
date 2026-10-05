@@ -38,7 +38,7 @@
 手元環境（Linux x86_64）での測定値です。条件をそろえた前後比較も含みます。
 
 | 項目 | rdsh | 比較対象 | 倍率 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `--version` 起動（中央値、n=5） | 約0.90ms | 本家dsh 約88ms | 約98倍 |
 | `--version` メモリ（最大RSS） | 約2.9MB | 本家 約66MB | 約1/23 |
 | フック相当処理のメモリ | 約2.7MB | node同等 約45MB | 約1/16 |
@@ -87,7 +87,7 @@ cd rustdsh
 ```
 
 | OS | スクリプト | 備考 |
-|---|---|---|
+| --- | --- | --- |
 | Linux / macOS | `./install.sh` | cargoかcurlが必要（rustup自動導入） |
 | WSL | ディストロ内で `./install.sh` | 自動検出。ネイティブ併用は `install.ps1 -Wsl` |
 | Windows（ネイティブ） | `.\install.ps1` | Rustが必要。コンパイルにMSVCビルドツールが必要 |
@@ -207,7 +207,7 @@ rdsh serve
 ```
 
 | API | 内容 |
-|---|---|
+| --- | --- |
 | `GET /api/version` | バージョン |
 | `GET /api/doctor` | 状態確認 |
 | `POST /api/tokens` | トークン推定（`{"text"}`） |
@@ -219,6 +219,12 @@ rdsh serve
 外部依存はありません（標準ライブラリのみ＋単一HTML埋め込み、CDN不要・オフライン可）です。
 
 使い分け：`rdsh serve` は手元の簡易状態ページです。プロジェクトの指標・質問と回答・スマホ接続には、下の [Node.jsダッシュボード](dashboard/README.md) を使います。
+
+### どちらを使うか（`rdsh serve` と `dashboard/`）
+
+- 手元の状態確認（バージョン・doctor・tokens・sessions）だけなら `rdsh serve` を使います。`rdsh` バイナリだけで動きます。
+- プロジェクトの指標・タスク・質問と回答・スマホ接続には `dashboard/` を使います。Node.js 22+ が必要です。詳しくは[Node.jsダッシュボードの案内](dashboard/README.md)を見てください。
+- dsh web GUIと同ポート（3080）で競合したら、dsh webを3080のままにして `rdsh serve --port 38080` で分けます。
 
 ### プロジェクト専用ダッシュボードとスマホ接続
 
@@ -273,11 +279,12 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 
 - まず [CONTRIBUTING.md](CONTRIBUTING.md)（PRは4行、スクリーンショット規定）。
 - バグ・要望：[Issueフォーム](https://github.com/sahenjp/rustdsh/issues/new/choose)（日本語OK）。
-- 質問・相談：[Discussions](https://github.com/sahenjp/rustdsh/discussions)。
+- 質問・相談：[Issues](https://github.com/sahenjp/rustdsh/issues)。
 - 脆弱性は公開Issueに書かず [SECURITY.md](SECURITY.md) へ。
 - 設計資料：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)・
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md)・[docs/ROADMAP.md](docs/ROADMAP.md)・
   [docs/RELEASING.md](docs/RELEASING.md)・[CHANGELOG.md](CHANGELOG.md)。
+- 改善案の索引：[Issue #74](https://github.com/sahenjp/rustdsh/issues/74)（全72案と機能Issueの対応表、優先度P0-P3付き）。
 
 ## よくある質問
 

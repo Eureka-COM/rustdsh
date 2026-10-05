@@ -114,12 +114,20 @@ function render(state) {
     card("タスク", `${done} / ${state.tasks.length}`, counts),
     card("未回答の質問", String(pending.length), `回答済み ${answered}`),
   );
+  // #42: 数値カードを開かなくても状態・判断要否だけ掴める一行要約。
+  $("overview").textContent =
+    `未回答の質問 ${pending.length} 件 · タスク ${done} / ${state.tasks.length}` +
+    (state.updated_at
+      ? ` · 最終更新 ${new Date(state.updated_at).toLocaleString("ja-JP")}`
+      : " · まだ報告がありません");
   $("task-milestones").textContent = [
     ...new Set(state.tasks.map((task) => task.milestone).filter(Boolean)),
   ].join(" / ");
   $("tasks").replaceChildren(
     ...state.tasks.map((task) => {
+      // #57: 端末を替えても同じ行へ戻れる安定アンカー。
       const tr = node("tr");
+      tr.id = "task-" + task.id;
       const status = node("td");
       status.append(node("span", task.status, "status " + task.status));
       tr.append(
@@ -133,6 +141,7 @@ function render(state) {
   );
   if (!state.tasks.length)
     $("tasks").append(emptyRow("タスクはまだ登録されていません", 4));
+  // #40: SSE 更新中も回答下書き・フォーカスを保持し、未回答・期限切れ・取消しを承認扱いにしない。
   // Preserve in-progress human drafts while incoming events refresh the dashboard.
   const drafts = new Map(
     [...$("questions").querySelectorAll("textarea")].map((area) => [
@@ -143,8 +152,21 @@ function render(state) {
   const active = document.activeElement?.dataset?.id;
   $("questions").replaceChildren(
     ...pending.map((question) => {
+      // #40: 相談と承認依頼を同じカード上で区別する。default_action
+      // があるものは承認依頼として示す。対象・条件の変更検知と無効化は
+      // server 側の契約（案53・43）に委ね、ここでは再確認を促す文言に留める。
+      // #57: 端末を替えても同じ質問へ戻れる安定アンカー。
+      const isApproval = Boolean(question.default_action);
       const tr = node("tr"),
         cell = node("td", undefined, "question");
+      tr.id = "question-" + question.id;
+      cell.append(
+        node(
+          "span",
+          isApproval ? "承認依頼" : "相談",
+          "kind" + (isApproval ? " kind-approval" : ""),
+        ),
+      );
       cell.append(node("div", question.question));
       const form = node("form"),
         textarea = node("textarea");
@@ -173,11 +195,18 @@ function render(state) {
         }
       });
       cell.append(form);
+      // #40: 既定の行動は参考表示であり、回答しても自動実行されない。
+      const defaultCell = node("td");
+      defaultCell.append(node("div", question.default_action || "指定なし"));
+      if (isApproval)
+        defaultCell.append(
+          node("div", "参考表示（回答しても自動実行されません）", "sub"),
+        );
       tr.append(
         node("td", question.id, "id"),
         node("td", question.urgency),
         cell,
-        node("td", question.default_action || "指定なし"),
+        defaultCell,
       );
       return tr;
     }),
@@ -282,6 +311,98 @@ $("share-refresh").addEventListener("click", async () => {
     $("share-message").textContent = e.message;
   } finally {
     $("share-refresh").disabled = false;
+  }
+});
+// #61: コマンドパレット。既存操作への別導線であり、権限・状態チェックや
+// 確認は各操作側（回答フォームなど）で行い、ここで迂回しない。
+// 入力欄での誤発動を避け、Esc・Ctrl/⌘+K・元フォーカス復帰だけを扱う。
+const paletteCommands = [
+  {
+    id: "toggle-share",
+    ja: "共有表示を切り替える",
+    en: "Toggle phone view",
+    keys: "共有 スマホ QR share phone",
+    run: () => $("share-toggle").click(),
+  },
+  {
+    id: "refresh-share",
+    ja: "共有の接続を更新する",
+    en: "Refresh share connection",
+    keys: "更新 refresh",
+    run: () => $("share-refresh").click(),
+  },
+  {
+    id: "goto-pending",
+    ja: "未回答の質問へ移動する",
+    en: "Go to pending questions",
+    keys: "質問 未回答 question pending",
+    run: () => $("pending-heading").focus(),
+  },
+  {
+    id: "toggle-answered",
+    ja: "回答済みの質問を開閉する",
+    en: "Toggle answered questions",
+    keys: "回答済み answered",
+    run: () => {
+      $("answered").open = !$("answered").open;
+    },
+  },
+  {
+    id: "back-to-top",
+    ja: "先頭へ戻る",
+    en: "Back to top",
+    keys: "先頭 top",
+    run: () => window.scrollTo({ top: 0 }),
+  },
+];
+let paletteReturnFocus = null;
+function renderPalette(filter = "") {
+  const query = filter.trim().toLowerCase();
+  const matched = paletteCommands.filter(
+    (command) =>
+      !query ||
+      (command.ja + " " + command.en + " " + command.keys)
+        .toLowerCase()
+        .includes(query),
+  );
+  $("palette-list").replaceChildren(
+    ...matched.map((command) => {
+      const item = node("li");
+      const button = node("button", command.ja + " · " + command.en);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        $("palette").close();
+        command.run();
+      });
+      item.append(button);
+      return item;
+    }),
+  );
+  $("palette-count").textContent = matched.length
+    ? matched.length + " 件"
+    : "該当なし";
+}
+function openPalette() {
+  paletteReturnFocus = document.activeElement;
+  renderPalette("");
+  $("palette-search").value = "";
+  $("palette").showModal();
+  $("palette-search").focus();
+}
+$("palette-toggle").addEventListener("click", openPalette);
+$("palette-search").addEventListener("input", (event) =>
+  renderPalette(event.target.value),
+);
+$("palette").addEventListener("close", () => {
+  if (paletteReturnFocus?.focus) paletteReturnFocus.focus();
+});
+document.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    event.preventDefault();
+    if ($("palette").open) $("palette").close();
+    else openPalette();
   }
 });
 try {
