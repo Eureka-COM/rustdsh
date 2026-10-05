@@ -7,6 +7,11 @@ import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import { isLegacyRequest } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { tools, executeTool } from "./mcp.mjs";
+// Bucket E (MCP) diagnostics — Issues #76-#79: tool-call errors surface via
+// executeTool diagnostics in mcp.mjs (exact-name precedence, known names,
+// permission guard intact). Legacy clients are rejected, never silently
+// downgraded; OAuth, single-screen server state, and binary safety stay in
+// the outer layers. No large feature additions here.
 import { eventDefinitions } from "./webhooks.mjs";
 
 export function modernMcpHandler(api, hub) {
