@@ -14,6 +14,18 @@
 //      fall back to source-file mtime vs credentials-file mtime)
 //   3. keep the file at 0600, otherwise dsh refuses to read it
 //   4. every other byte of the document is preserved (line surgery, no re-emit)
+//
+// Issue #87 epic memo (87-1 design decision, comment only, no routing logic yet):
+//   - Placement UNDECIDED: rdsh is a launcher/sim (passthrough delegation in
+//     src/main.rs), not an LLM gateway. Candidates: (a) advise profile choice
+//     at startup only, (b) rewrite agent-default-model in cordis.patch.yml,
+//     (c) relay requests. No implementation until 87-1 picks one.
+//   - Price source: official pages only (URL/format/refresh TBD for 2 firms);
+//     start with a manual table (87-2), auto-fetch comes later (87-3).
+//   - Formula (units fixed in 87-1): effective price = API price x model
+//     multiplier x (monthly fee / Credits); two worked examples TBD in 87-1.
+//   - Related: provider_needs() detection (ok/importable/missing) excludes
+//     unusable routes in 87-2; ZDR mode is split out to 87-5 (requirements first).
 
 use std::collections::HashMap;
 

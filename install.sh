@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # rdsh installer: install as `rdsh`, optionally shadow `dsh` (with backup + restore).
+# Release checklist (Issue #7, docs only):
+# 1) bump version in Cargo.toml, 2) cargo build/test/regress green,
+# 3) commit + push, 4) cargo publish (needs crates.io token + verified email),
+# 5) refresh live install via ./install.sh --as-dsh and verify `dsh --version`
+# delegation, 6) confirm sync-dsh.sh picks up the new version on its next run.
 set -euo pipefail
 # Release-download scratch dir (set by fetch_release); cleaned at exit.
 FETCH_TMPD=""
