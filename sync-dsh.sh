@@ -3,6 +3,8 @@
 # rebuild: it delegates by exec). Safe by default: verify after update,
 # roll back to the previous version on any failure.
 # Usage: sync-dsh.sh [--check-only] [--channel rc|any]  (default channel: rc)
+# rdsh self-update prefers a prebuilt release binary; source builds run only with
+# RDSH_SYNC_FROM_SOURCE=1 (under nice/ionice). Regress always runs sandboxed.
 set -u
 CHANNEL="rc"
 CHECK_ONLY=0
@@ -10,7 +12,7 @@ for a in "$@"; do
   case "$a" in
     --check-only) CHECK_ONLY=1 ;;
     --channel=*) CHANNEL="${a#--channel=}" ;;
-    -h|--help) echo "usage: sync-dsh.sh [--check-only] [--channel rc|any]"; exit 0 ;;
+    -h|--help) echo "usage: sync-dsh.sh [--check-only] [--channel rc|any]"; echo "  env: RDSH_SYNC_FROM_SOURCE=1 (rebuild rdsh from source instead of release binary)"; echo "       RDSH_MUSL=1 (prefer the static musl build), RDSH_SYNC_VERSION=VER (pin release)"; exit 0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
 done
@@ -26,6 +28,68 @@ export PATH="$HOME/.local/bin:$HOME/.local/opt/node-v24.16.0-linux-x64/bin:$HOME
 write_state() {
   printf "{\"updated\":true,\"kind\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"at\":%s}\n" \
     "$1" "$2" "$3" "$(date +%s)000" > "$LOGDIR/update-state.json"
+}
+FROM_SOURCE="${RDSH_SYNC_FROM_SOURCE:-0}"
+PREFIX_BIN="${PREFIX_BIN:-$HOME/.local/bin}"
+lowprio_run() {
+  # Run "$@" at idle I/O + lowest CPU priority when nice/ionice exist.
+  if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then
+    ionice -c3 nice -n 19 "$@"
+  elif command -v nice >/dev/null 2>&1; then
+    nice -n 19 "$@"
+  else
+    "$@"
+  fi
+}
+sandboxed_regress() {
+  # Run regress with a throwaway HOME/DSH_HOME (issue #85 item 8).
+  sb="$(mktemp -d 2>/dev/null || mktemp -d -t rdsh-sync-regress)"
+  mkdir -p "$sb/home" "$sb/dsh"
+  if HOME="$sb/home" DSH_HOME="$sb/dsh" BIN="$1" sh "$REPO/tests/regress.sh" >> "$LOGDIR/sync.log" 2>&1; then
+    rc=0
+  else
+    rc=1
+  fi
+  rm -rf "$sb"
+  return $rc
+}
+rdsh_release_asset() {
+  # Print the prebuilt asset name for this host (musl on Linux/x86_64 when
+  # RDSH_MUSL=1 or glibc < 2.34); fail when no binary exists.
+  os="$(uname -s 2>/dev/null || echo unknown)"
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+  case "$os/$arch" in
+    Linux/x86_64)
+      if [ "${RDSH_MUSL:-0}" = 1 ]; then echo "rdsh-linux-x64-musl.tar.gz"; return 0; fi
+      gv="$(ldd --version 2>/dev/null | head -n 1 | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | tail -n 1)"
+      if [ -n "$gv" ] && awk -v a="$gv" -v b="2.34" 'BEGIN { n=split(a,aa,"."); m=split(b,bb,"."); k=(n>m?n:m); for(i=1;i<=k;i++){x=(aa[i]==""?0:aa[i]); y=(bb[i]==""?0:bb[i]); if(x<y) exit 0; if(x>y) exit 1;} exit 1; }'; then
+        echo "rdsh-linux-x64-musl.tar.gz"
+      else
+        echo "rdsh-linux-x64.tar.gz"
+      fi
+      ;;
+    Darwin/arm64) echo "rdsh-macos-arm64.tar.gz" ;;
+    Darwin/x86_64) echo "rdsh-macos-x64.tar.gz" ;;
+    *) return 1 ;;
+  esac
+}
+fetch_rdsh_release() {
+  # Install the prebuilt release rdsh binary to $1. Honors RDSH_RELEASE_BASE
+  # (tests: file:///path) and RDSH_SYNC_VERSION (default: latest).
+  dest="$1"
+  base="${RDSH_RELEASE_BASE:-https://github.com/sahenjp/rustdsh/releases}"
+  ver="${RDSH_SYNC_VERSION:-latest}"
+  asset="$(rdsh_release_asset)" || { log "no prebuilt rdsh binary for this host; set RDSH_SYNC_FROM_SOURCE=1 to build"; return 1; }
+  if [ "$ver" = "latest" ]; then url="$base/latest/download/$asset"; else url="$base/download/$ver/$asset"; fi
+  tmpd="$(mktemp -d 2>/dev/null || mktemp -d -t rdsh-sync-fetch)"
+  log "fetching rdsh release: $url"
+  if ! curl -fsSL -o "$tmpd/pkg.tgz" "$url"; then rm -rf "$tmpd"; return 1; fi
+  if ! tar -xzf "$tmpd/pkg.tgz" -C "$tmpd"; then rm -rf "$tmpd"; return 1; fi
+  if [ ! -x "$tmpd/rdsh" ]; then rm -rf "$tmpd"; return 1; fi
+  install -m755 "$tmpd/rdsh" "$dest"
+  rc=$?
+  rm -rf "$tmpd"
+  return $rc
 }
 NPM=""
 for cand in "${NPM_BIN:-}" "$HOME/.local/bin/npm" "$HOME/.local/opt/node-v24.16.0-linux-x64/bin/npm" "$(command -v npm 2>/dev/null)"; do
@@ -73,14 +137,16 @@ fi
 fi
 REPO="$(cd "$(dirname "$0")" && pwd)"
 if [ -x "$REPO/target/release/rdsh" ] && [ -f "$REPO/tests/regress.sh" ]; then
-  if BIN="$REPO/target/release/rdsh" sh "$REPO/tests/regress.sh" >> "$LOGDIR/sync.log" 2>&1; then
+  if sandboxed_regress "$REPO/target/release/rdsh"; then
     log "post-update regress: ALL PASS"
   else
     log "post-update regress: FAILURES (see above); dsh itself is updated, rdsh compat needs a look"
   fi
 fi
-if [ -d "$REPO/.git" ] && command -v git >/dev/null 2>&1; then
-  if ! git -C "$REPO" fetch origin main >> "$LOGDIR/sync.log" 2>&1; then
+if [ "$FROM_SOURCE" = 1 ]; then
+  if [ ! -d "$REPO/.git" ] || ! command -v git >/dev/null 2>&1; then
+    log "rdsh repo unavailable; skipping source build"
+  elif ! git -C "$REPO" fetch origin main >> "$LOGDIR/sync.log" 2>&1; then
     log "rdsh fetch failed; try later"
   else
     LOCAL="$(git -C "$REPO" rev-parse HEAD 2>/dev/null)"
@@ -97,21 +163,43 @@ if [ -d "$REPO/.git" ] && command -v git >/dev/null 2>&1; then
       log "rdsh fast-forward failed; skipping"
     elif ! command -v cargo >/dev/null 2>&1; then
       log "cargo not found; pulled but not rebuilt"
-    elif (cd "$REPO" && cargo build --release >> "$LOGDIR/sync.log" 2>&1) \
-      && BIN="$REPO/target/release/rdsh" sh "$REPO/tests/regress.sh" >> "$LOGDIR/sync.log" 2>&1; then
-      PREFIX_BIN="${PREFIX_BIN:-$HOME/.local/bin}"
+    elif (cd "$REPO" && lowprio_run cargo build --release >> "$LOGDIR/sync.log" 2>&1) \
+      && sandboxed_regress "$REPO/target/release/rdsh"; then
       install -m755 "$REPO/target/release/rdsh" "$PREFIX_BIN/rdsh"
       if "$PREFIX_BIN/dsh" doctor 2>&1 | grep -q "rdsh"; then
         TMP="$PREFIX_BIN/.dsh.new.$$"
         install -m755 "$PREFIX_BIN/rdsh" "$TMP" && mv -f "$TMP" "$PREFIX_BIN/dsh"
       fi
-      write_state "rdsh" "$LOCAL" "$REMOTE"
-      log "rdsh updated OK: $REMOTE (regress passed, binaries refreshed)"
+      write_state "rdsh-source" "$LOCAL" "$REMOTE"
+      log "rdsh updated OK: $REMOTE (source build, regress passed, binaries refreshed)"
     else
       log "rdsh build/regress failed; binaries untouched"
     fi
   fi
 else
-  log "rdsh repo unavailable; skipping"
+  if [ "$CHECK_ONLY" = 1 ]; then
+    log "rdsh update check: release channel (RDSH_SYNC_VERSION=${RDSH_SYNC_VERSION:-latest})"
+  else
+    NEWBIN="$(mktemp 2>/dev/null || mktemp -t rdsh-sync-new)"
+    rm -f "$NEWBIN"
+    if ! fetch_rdsh_release "$NEWBIN"; then
+      log "rdsh release fetch failed; binaries untouched"
+    elif ! "$NEWBIN" --version >/dev/null 2>&1; then
+      log "rdsh release binary failed to run; binaries untouched"
+    elif [ -f "$REPO/tests/regress.sh" ] && ! sandboxed_regress "$NEWBIN"; then
+      log "rdsh release regress failed; binaries untouched"
+    else
+      OLD_RDSH="$("$PREFIX_BIN/rdsh" --version 2>/dev/null || echo unknown)"
+      NEW_RDSH="$("$NEWBIN" --version 2>/dev/null || echo unknown)"
+      install -m755 "$NEWBIN" "$PREFIX_BIN/rdsh"
+      if "$PREFIX_BIN/dsh" doctor 2>&1 | grep -q "rdsh"; then
+        TMP="$PREFIX_BIN/.dsh.new.$$"
+        install -m755 "$PREFIX_BIN/rdsh" "$TMP" && mv -f "$TMP" "$PREFIX_BIN/dsh"
+      fi
+      write_state "rdsh-release" "$OLD_RDSH" "$NEW_RDSH"
+      log "rdsh updated OK via release binary ($NEW_RDSH; regress passed, binaries refreshed)"
+    fi
+    rm -f "$NEWBIN"
+  fi
 fi
 log "done"

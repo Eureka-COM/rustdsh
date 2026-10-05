@@ -95,6 +95,15 @@ fn entry_kind(e: &std::fs::DirEntry, p: &std::path::Path, name: &str) -> EntryKi
     }
 }
 
+/// Shared worker cap (issue #85-4): cores clamped to 1..=8 so a 2-core
+/// host stays responsive while bigger machines still parallelize.
+fn parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 8)
+}
+
 /// Walk subdirectories in parallel while preserving exact sequential order:
 /// root entries keep their listing order and each subtree is joined in place.
 /// Falls back to the plain sequential walk for narrow trees.
@@ -146,7 +155,7 @@ fn collect_parallel(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         .collect();
     let mut resolved: Vec<Vec<std::path::PathBuf>> = vec![];
     resolved.resize_with(sub_idx.len(), Vec::new);
-    for batch in sub_idx.chunks(8) {
+    for batch in sub_idx.chunks(parallelism().max(1)) {
         std::thread::scope(|s| {
             let mut handles = vec![];
             for (k, seg_i) in batch.iter().enumerate() {
@@ -221,10 +230,7 @@ fn grep_one(pattern: &str, path: &std::path::Path) -> Vec<String> {
 }
 
 fn grep_parallel(pattern: &str, files: &[std::path::PathBuf]) -> Vec<Vec<String>> {
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .clamp(1, 8);
+    let threads = parallelism();
     if threads <= 1 {
         return files.iter().map(|p| grep_one(pattern, p)).collect();
     }
@@ -259,6 +265,12 @@ fn gt_sign() -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_cap() {
+        // Issue #85-4: walker/grep threads follow cores, clamped 1..=8.
+        assert!((1..=8).contains(&parallelism()));
+    }
 
     #[test]
     fn capped_boundary() {

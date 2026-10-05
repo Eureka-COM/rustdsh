@@ -249,19 +249,19 @@ fn main() {
             }
         }
         Some(Commands::DumpConfig { profile, native }) => {
-            let p = profile.or(cli.profile).unwrap_or_else(|| "tui".to_string());
-            if native {
-                dump_config_native(&p, &cli.patch)
-            } else {
-                passthrough::exec_dump_config(&p, &cli.patch, dry, slim)
-            }
+            profile_or_default(profile.or(cli.profile)).and_then(|p| {
+                if native {
+                    dump_config_native(&p, &cli.patch)
+                } else {
+                    passthrough::exec_dump_config(&p, &cli.patch, dry, slim)
+                }
+            })
         }
         Some(Commands::Boot {
             profile,
             from_default_profile,
             args,
-        }) => {
-            let p = profile.or(cli.profile).unwrap_or_else(|| "tui".to_string());
+        }) => profile_or_default(profile.or(cli.profile)).and_then(|p| {
             passthrough::exec_boot(
                 &p,
                 from_default_profile.as_deref(),
@@ -270,13 +270,22 @@ fn main() {
                 dry,
                 slim,
             )
-        }
+        }),
         None => {
+            let wants_help = cli.extra.iter().any(|a| a == "-h" || a == "--help");
             let parsed = dsh_args::split_launcher_args(cli.profile, cli.extra);
             match parsed {
                 dsh_args::Launcher::Help => {
-                    print_help();
-                    Ok(())
+                    if wants_help {
+                        print_help();
+                        Ok(())
+                    } else {
+                        // Bare `rdsh` (no profile, no help flag): boot the
+                        // resolved default instead of showing help.
+                        resolve_default_profile().and_then(|p| {
+                            passthrough::exec_boot(&p, None, &cli.patch, &[], dry, slim)
+                        })
+                    }
                 }
                 dsh_args::Launcher::Plugin { profile, pnpm_args } => {
                     passthrough::exec_plugin(&profile, &pnpm_args, dry, slim)
@@ -314,6 +323,34 @@ fn main() {
         eprintln!("[rdsh] error: {e:#}");
         std::process::exit(1);
     }
+}
+
+// Default profile order: RDSH_DEFAULT_PROFILE, then a local tui profile,
+// else a guided error (dsh 0.2.0 ships acp, web, headless, sdk and
+// sdk-minimal templates, but no tui template, so a bare default of tui
+// would fail on fresh environments).
+fn pick_default_profile(env: Option<&str>, local_tui: bool) -> Result<String, String> {
+    if let Some(name) = env.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(name.to_string());
+    }
+    if local_tui {
+        return Ok("tui".to_string());
+    }
+    Err("no profile specified and no local \u{2018}tui\u{2019} profile found (dsh 0.2.0 ships acp, web, headless, sdk and sdk-minimal templates, but no tui template). Boot with --profile <name> (e.g. --profile web) or set RDSH_DEFAULT_PROFILE=<name>".to_string())
+}
+
+fn profile_or_default(opt: Option<String>) -> anyhow::Result<String> {
+    match opt {
+        Some(p) => Ok(p),
+        None => resolve_default_profile(),
+    }
+}
+
+fn resolve_default_profile() -> anyhow::Result<String> {
+    let env = std::env::var("RDSH_DEFAULT_PROFILE").ok();
+    let home = crate::inspect::dsh_home();
+    let local_tui = std::path::Path::new(&format!("{home}/profiles/tui")).is_dir();
+    pick_default_profile(env.as_deref(), local_tui).map_err(|m| anyhow::anyhow!(m))
 }
 
 fn print_help() {
@@ -555,4 +592,28 @@ fn summarize(v: &[std::time::Duration]) -> String {
     s.sort();
     let mid = s[s.len() / 2];
     format!("median={mid:?} min={:?} max={:?}", s[0], s[s.len() - 1])
+}
+
+#[cfg(test)]
+mod default_profile_tests {
+    use super::pick_default_profile;
+
+    #[test]
+    fn env_wins() {
+        assert_eq!(pick_default_profile(Some("web"), false).unwrap(), "web");
+        assert_eq!(pick_default_profile(Some(" web "), true).unwrap(), "web");
+    }
+
+    #[test]
+    fn local_tui_fallback() {
+        assert_eq!(pick_default_profile(None, true).unwrap(), "tui");
+        assert_eq!(pick_default_profile(Some(""), true).unwrap(), "tui");
+    }
+
+    #[test]
+    fn guided_error_without_either() {
+        let err = pick_default_profile(None, false).unwrap_err();
+        assert!(err.contains("RDSH_DEFAULT_PROFILE"), "{err}");
+        assert!(err.contains("--profile"), "{err}");
+    }
 }

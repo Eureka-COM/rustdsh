@@ -110,17 +110,21 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
     };
     let mut out: Vec<Session> = vec![];
     if projs.len() >= 2 {
-        std::thread::scope(|s| {
-            let mut handles = vec![];
-            for proj in &projs {
-                let pdir = std::path::Path::new(&root).join(proj);
-                let proj = proj.clone();
-                handles.push(s.spawn(move || scan_project(&pdir, &proj)));
-            }
-            for h in handles {
-                out.extend(h.join().unwrap_or_default());
-            }
-        });
+        // Bounded worker pool (issue #85-3): one batch at a time so a host
+        // with hundreds of projects never spawns hundreds of threads.
+        for batch in projs.chunks(parallelism()) {
+            std::thread::scope(|s| {
+                let mut handles = vec![];
+                for proj in batch {
+                    let pdir = std::path::Path::new(&root).join(proj);
+                    let proj = proj.clone();
+                    handles.push(s.spawn(move || scan_project(&pdir, &proj)));
+                }
+                for h in handles {
+                    out.extend(h.join().unwrap_or_default());
+                }
+            });
+        }
     } else {
         for proj in &projs {
             let pdir = std::path::Path::new(&root).join(proj);
@@ -129,37 +133,36 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.mtime));
     let total = out.len();
-    let zstd = tokens && zstd_available();
-    if tokens && !zstd {
-        eprintln!("[rdsh] note: zstd CLI not found; token column shows stored-bytes/4 estimate");
-    }
+    // Frame headers give exact sizes with std only (no subprocess); the CLI
+    // is probed only when tokens are requested, and only used as a fallback
+    // for frames that omit their content size.
+    let zstd_cli = tokens && zstd_available();
     let shown: Vec<&Session> = out.iter().take(limit).collect();
-    // NOTE: decompressed sizes feed only the tokens column (tokens && zstd).
-    // Otherwise the result is ignored, so skip the zstd subprocesses entirely.
-    let sizes: Vec<Option<u64>> = if tokens && zstd {
+    // NOTE: decompressed sizes feed only the tokens column (tokens set).
+    // Otherwise the result is ignored, so skip all size work entirely.
+    let sizes: Vec<Option<u64>> = if tokens {
         if shown.len() >= 2 {
-            batch_decompressed(&root, &shown)
+            batch_decompressed(&root, &shown, zstd_cli)
         } else {
             shown
                 .iter()
-                .map(|s| decompressed_bytes(&root, &s.project, &s.id))
+                .map(|s| session_decompressed_bytes(&root, &s.project, &s.id, zstd_cli))
                 .collect()
         }
     } else {
         vec![None; shown.len()]
     };
+    if tokens && !zstd_cli && sizes.iter().any(|s| s.is_none()) {
+        eprintln!("[rdsh] note: zstd CLI not found; `?` rows show stored-bytes/4 estimate");
+    }
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     for (s, decomp) in shown.iter().zip(sizes.iter()) {
         let tok = if tokens {
-            if zstd {
-                match decomp {
-                    Some(b) => format!("~{}tok", b / 4),
-                    None => format!("~{}tok?", s.bytes / 4),
-                }
-            } else {
-                format!("~{}tok?", s.bytes / 4)
+            match decomp {
+                Some(b) => format!("~{}tok", b / 4),
+                None => format!("~{}tok?", s.bytes / 4),
             }
         } else {
             "-".to_string()
@@ -234,20 +237,43 @@ fn dir_size_mtime(dir: &std::path::Path) -> (u64, u64, String) {
     (bytes, mtime, mtime_s)
 }
 
-fn batch_decompressed(root: &str, shown: &[&Session]) -> Vec<Option<u64>> {
+/// Shared worker cap (issues #85-3, #85-4): cores clamped to 1..=8 so a
+/// 2-core host stays responsive while bigger machines still parallelize.
+fn parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 8)
+}
+
+/// Subprocess batch width: external `zstd` calls pay spawn latency each,
+/// so waves must overlap it. Memory stays O(1) per process (64 KiB pump),
+/// therefore oversubscribing CPU here is safe, unlike thread work.
+/// Keeps a hard bound (no unbounded spawn storms) while hiding latency.
+fn subprocess_width() -> usize {
+    (parallelism() * 4).clamp(8, 32)
+}
+
+fn batch_decompressed(root: &str, shown: &[&Session], zstd_cli: bool) -> Vec<Option<u64>> {
     let mut out: Vec<Option<u64>> = vec![None; shown.len()];
-    std::thread::scope(|s| {
-        let mut handles = vec![];
-        for sess in shown {
-            let root = root.to_string();
-            let proj = sess.project.clone();
-            let id = sess.id.clone();
-            handles.push(s.spawn(move || decompressed_bytes(&root, &proj, &id)));
-        }
-        for (i, h) in handles.into_iter().enumerate() {
-            out[i] = h.join().unwrap_or(None);
-        }
-    });
+    let width = subprocess_width();
+    for (base, chunk) in shown.chunks(width).enumerate() {
+        std::thread::scope(|s| {
+            let mut handles = vec![];
+            for (j, sess) in chunk.iter().enumerate() {
+                let root = root.to_string();
+                let proj = sess.project.clone();
+                let id = sess.id.clone();
+                handles.push((
+                    j,
+                    s.spawn(move || session_decompressed_bytes(&root, &proj, &id, zstd_cli)),
+                ));
+            }
+            for (j, h) in handles {
+                out[base * width + j] = h.join().unwrap_or(None);
+            }
+        });
+    }
     out
 }
 
@@ -259,29 +285,201 @@ fn zstd_available() -> bool {
         .unwrap_or(false)
 }
 
-fn decompressed_bytes(root: &str, project: &str, id: &str) -> Option<u64> {
+/// Exact decompressed byte total for one session: std-only frame headers
+/// first, streaming `zstd -dc` only for files whose frames omit the size.
+/// Returns None when no `.zstd` file yielded a size (same `?` set as before).
+fn session_decompressed_bytes(root: &str, project: &str, id: &str, zstd_cli: bool) -> Option<u64> {
     let dir = std::path::Path::new(root).join(project).join(id);
     let entries = std::fs::read_dir(dir).ok()?;
     let mut total = 0u64;
     let mut any = false;
+    let mut deferred = vec![];
     for e in entries.filter_map(|e| e.ok()) {
         let p = e.path();
         let name = p.file_name()?.to_string_lossy().into_owned();
         if !name.ends_with(".zstd") {
             continue;
         }
-        let out = std::process::Command::new("zstd")
-            .arg("-dc")
-            .arg("--")
-            .arg(&p)
-            .output()
-            .ok()?;
-        if out.status.success() {
-            total += out.stdout.len() as u64;
-            any = true;
+        match zstd_frame_content_size(&p) {
+            Some(n) => {
+                total += n;
+                any = true;
+            }
+            None => deferred.push(p),
+        }
+    }
+    if !deferred.is_empty() {
+        if !zstd_cli {
+            return None;
+        }
+        // Same skip set as the old per-file `zstd -dc`: unreadable files
+        // are skipped, they only force `?` when nothing else resolved.
+        for p in &deferred {
+            if let Some(n) = stream_decompressed_bytes(p) {
+                total += n;
+                any = true;
+            }
         }
     }
     if any {
+        Some(total)
+    } else {
+        None
+    }
+}
+
+/// Sum of zstd frame content sizes (RFC 8878 §3.1) without decompressing.
+/// Returns None when any frame omits its size or the stream is not a plain
+/// sequence of frames — the caller then streams `zstd -dc` instead.
+fn zstd_frame_content_size(path: &std::path::Path) -> Option<u64> {
+    const MAGIC: u32 = 0xFD2F_B528;
+    let bytes = std::fs::read(path).ok()?;
+    let mut pos = 0usize;
+    let mut total = 0u64;
+    let mut frames = 0u32;
+    while pos + 4 <= bytes.len() {
+        let magic =
+            u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
+        if magic == MAGIC {
+            pos += 4;
+            if pos >= bytes.len() {
+                return None;
+            }
+            let desc = bytes[pos];
+            pos += 1;
+            if desc & 0x08 != 0 {
+                return None; // reserved bit; stay conservative
+            }
+            let fcs_flag = desc >> 6;
+            let single = desc >> 5 & 1 == 1;
+            let checksum = desc >> 2 & 1 == 1;
+            let dict_len = match desc & 0x03 {
+                0 => 0,
+                1 => 1,
+                2 => 2,
+                _ => 4,
+            };
+            let fcs_len = match (fcs_flag, single) {
+                (0, true) => 1,
+                (0, false) => 0,
+                (1, _) => 2,
+                (2, _) => 4,
+                _ => 8,
+            };
+            let head = (usize::from(!single)) + dict_len + fcs_len;
+            if pos.checked_add(head)? > bytes.len() {
+                return None;
+            }
+            if !single {
+                pos += 1; // window descriptor (value unneeded)
+            }
+            pos += dict_len;
+            let fcs = match fcs_len {
+                0 => None, // size omitted: must stream
+                1 => Some(bytes[pos] as u64),
+                2 => Some(u16::from_le_bytes([bytes[pos], bytes[pos + 1]]) as u64 + 256),
+                4 => Some(u32::from_le_bytes([
+                    bytes[pos],
+                    bytes[pos + 1],
+                    bytes[pos + 2],
+                    bytes[pos + 3],
+                ]) as u64),
+                _ => Some(u64::from_le_bytes([
+                    bytes[pos],
+                    bytes[pos + 1],
+                    bytes[pos + 2],
+                    bytes[pos + 3],
+                    bytes[pos + 4],
+                    bytes[pos + 5],
+                    bytes[pos + 6],
+                    bytes[pos + 7],
+                ])),
+            };
+            pos += fcs_len;
+            total = total.checked_add(fcs?)?;
+            frames += 1;
+            // Walk data blocks to the next frame (block header: last(1) +
+            // type(2) + size(21) bits, little-endian).
+            loop {
+                if pos + 3 > bytes.len() {
+                    return None;
+                }
+                let v = bytes[pos] as u32
+                    | (bytes[pos + 1] as u32) << 8
+                    | (bytes[pos + 2] as u32) << 16;
+                let btype = v >> 1 & 3;
+                let bsize = (v >> 3) as usize;
+                if btype == 3 {
+                    return None; // reserved block type
+                }
+                pos += 3;
+                pos = pos.checked_add(if btype == 1 { 1 } else { bsize })?;
+                if pos > bytes.len() {
+                    return None;
+                }
+                if v & 1 == 1 {
+                    if checksum {
+                        pos = pos.checked_add(4)?;
+                        if pos > bytes.len() {
+                            return None;
+                        }
+                    }
+                    break;
+                }
+            }
+        } else if magic & 0xFFFF_FFF0 == 0x184D_2A50 {
+            // Skippable frame: 4-byte LE payload size follows the magic.
+            if pos + 8 > bytes.len() {
+                return None;
+            }
+            let skip = u32::from_le_bytes([
+                bytes[pos + 4],
+                bytes[pos + 5],
+                bytes[pos + 6],
+                bytes[pos + 7],
+            ]) as usize;
+            pos += 8;
+            pos = pos.checked_add(skip)?;
+            if pos > bytes.len() {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    if pos != bytes.len() || frames == 0 {
+        return None;
+    }
+    Some(total)
+}
+
+/// Streaming `zstd -dc` byte count with O(1) memory: the pipe is pumped in
+/// 64 KiB chunks instead of buffering the whole output (old `.output()`).
+fn stream_decompressed_bytes(path: &std::path::Path) -> Option<u64> {
+    use std::io::Read;
+    let mut child = std::process::Command::new("zstd")
+        .arg("-dc")
+        .arg("--")
+        .arg(path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut total = 0u64;
+    let mut buf = [0u8; 65536];
+    if let Some(mut out) = child.stdout.take() {
+        loop {
+            match out.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => total += n as u64,
+                Err(_) => {
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        }
+    }
+    if child.wait().ok()?.success() {
         Some(total)
     } else {
         None
@@ -415,4 +613,182 @@ pub fn sessions_json(limit: usize) -> String {
     out.sort_by(|a, b| mtime_of(b).cmp(mtime_of(a)));
     out.truncate(limit.clamp(1, 100));
     serde_json::json!({"sessions": out, "projects": projs.len()}).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_cap() {
+        // Issues #85-3, #85-4: scan/token threads follow cores, clamped 1..=8.
+        assert!((1..=8).contains(&parallelism()));
+    }
+
+    /// Minimal single-segment frame with one raw block (RFC 8878 §3.1).
+    fn raw_frame(
+        fcs_flag: u8,
+        dict_id: &[u8],
+        fcs: &[u8],
+        payload: &[u8],
+        checksum: bool,
+    ) -> Vec<u8> {
+        let mut v = vec![0x28, 0xB5, 0x2F, 0xFD];
+        let single = u8::from(fcs_flag == 0 && dict_id.is_empty() && fcs.len() == 1);
+        let dict_flag = match dict_id.len() {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            _ => 3,
+        };
+        let desc = fcs_flag << 6 | single << 5 | u8::from(checksum) << 2 | dict_flag;
+        v.push(desc);
+        if single == 0 {
+            v.push(0x00); // window descriptor (value irrelevant here)
+        }
+        v.extend_from_slice(dict_id);
+        v.extend_from_slice(fcs);
+        let size = payload.len() as u32;
+        assert!(size < (1 << 21));
+        let hdr = 1u32 | size << 3; // last block, raw type
+        v.push((hdr & 0xFF) as u8);
+        v.push(((hdr >> 8) & 0xFF) as u8);
+        v.push(((hdr >> 16) & 0xFF) as u8);
+        v.extend_from_slice(payload);
+        if checksum {
+            v.extend_from_slice(&[0, 0, 0, 0]);
+        }
+        v
+    }
+
+    fn write_tmp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    #[test]
+    fn frame_header_sizes() {
+        // 1-byte FCS (single segment): exact size.
+        let p = write_tmp(
+            "rdsh-zstd-1b.zstd",
+            &raw_frame(0, &[], &[5], b"hello", false),
+        );
+        assert_eq!(zstd_frame_content_size(&p), Some(5));
+        // 2-byte FCS: stored value + 256.
+        let body = vec![7u8; 300];
+        let p2 = write_tmp(
+            "rdsh-zstd-2b.zstd",
+            &raw_frame(1, &[], &[44, 0], &body, false),
+        );
+        assert_eq!(zstd_frame_content_size(&p2), Some(300));
+        // 4-byte FCS with dictionary id and checksum.
+        let body4 = vec![9u8; 70000];
+        let mut fcs = 70000u32.to_le_bytes().to_vec();
+        let _ = fcs.pop();
+        let f4 = raw_frame(2, &[0xAA], &[fcs[0], fcs[1], fcs[2], 0], &body4, true);
+        let p4 = write_tmp("rdsh-zstd-4b.zstd", &f4);
+        assert_eq!(zstd_frame_content_size(&p4), Some(70000));
+        for f in [&p, &p2, &p4] {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+
+    #[test]
+    fn frame_header_fallback_cases() {
+        // Multi-frame streams sum.
+        let mut two = raw_frame(0, &[], &[5], b"hello", false);
+        two.extend_from_slice(&raw_frame(0, &[], &[3], b"abc", false));
+        let pm = write_tmp("rdsh-zstd-multi.zstd", &two);
+        assert_eq!(zstd_frame_content_size(&pm), Some(8));
+        // Skippable frame in front is skipped.
+        let mut sk = vec![0x50, 0x2A, 0x4D, 0x18, 0x02, 0x00, 0x00, 0x00, 0xAA, 0xBB];
+        sk.extend_from_slice(&raw_frame(0, &[], &[5], b"hello", false));
+        let ps = write_tmp("rdsh-zstd-skip.zstd", &sk);
+        assert_eq!(zstd_frame_content_size(&ps), Some(5));
+        // Unknown size (non-single-segment, FCS flag 0) needs streaming.
+        let pu = write_tmp(
+            "rdsh-zstd-unk.zstd",
+            &raw_frame(0, &[0xAA], &[], b"abc", false),
+        );
+        assert_eq!(zstd_frame_content_size(&pu), None);
+        // Truncated / garbage files need streaming too.
+        let pt = write_tmp("rdsh-zstd-trunc.zstd", &[0x28, 0xB5, 0x2F, 0xFD, 0x20]);
+        assert_eq!(zstd_frame_content_size(&pt), None);
+        let pg = write_tmp("rdsh-zstd-garbage.zstd", b"not zstd at all!!");
+        assert_eq!(zstd_frame_content_size(&pg), None);
+        for f in [&pm, &ps, &pu, &pt, &pg] {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+
+    #[test]
+    fn header_matches_stream_on_real_files() {
+        // Real session files are streaming-compressed (no stored size), so
+        // they exercise the streaming fallback; it must agree with the old
+        // buffered `zstd -dc` byte count (covered by the old-vs-new diff).
+        // A CLI-compressed file (seekable input carries FCS) proves the
+        // header path against a real encoder. Skips without fixtures/CLI.
+        if !zstd_available() {
+            return;
+        }
+        let dir = std::env::temp_dir();
+        let src = dir.join("rdsh-zstd-fixture.bin");
+        let dst = dir.join("rdsh-zstd-fixture.bin.zst");
+        // Random bytes (incompressible) keep every block large and raw-free.
+        let mut seed = 0x9E37_79B9u64;
+        let mut body = vec![0u8; 100_000];
+        for b in &mut body {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *b = (seed >> 33) as u8;
+        }
+        std::fs::write(&src, &body).unwrap();
+        let status = std::process::Command::new("zstd")
+            .arg("-q")
+            .arg("-f")
+            .arg(&src)
+            .arg("-o")
+            .arg(&dst)
+            .status();
+        if status.map(|s| s.success()).unwrap_or(false) {
+            assert_eq!(
+                zstd_frame_content_size(&dst),
+                stream_decompressed_bytes(&dst)
+            );
+            assert_eq!(zstd_frame_content_size(&dst), Some(body.len() as u64));
+        }
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
+        let root = format!("{}/sessions", dsh_home());
+        let Ok(projs) = std::fs::read_dir(&root) else {
+            return;
+        };
+        let mut checked = 0;
+        'scan: for proj in projs.filter_map(|e| e.ok()) {
+            let Ok(sess) = std::fs::read_dir(proj.path()) else {
+                continue;
+            };
+            for s in sess.filter_map(|e| e.ok()) {
+                let Ok(files) = std::fs::read_dir(s.path()) else {
+                    continue;
+                };
+                for f in files.filter_map(|e| e.ok()) {
+                    let p = f.path();
+                    if p.extension().and_then(|e| e.to_str()) != Some("zstd") {
+                        continue;
+                    }
+                    // Header-resolved files must agree with the stream count;
+                    // FCS-less files (None) are the expected fallback set.
+                    if let Some(n) = zstd_frame_content_size(&p) {
+                        assert_eq!(Some(n), stream_decompressed_bytes(&p), "{}", p.display());
+                    }
+                    checked += 1;
+                    if checked >= 6 {
+                        break 'scan;
+                    }
+                }
+            }
+        }
+        assert!(checked > 0, "expected real session fixtures");
+    }
 }

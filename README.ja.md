@@ -163,9 +163,11 @@ echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*token*"
 `dsh`名で呼ばれた場合の振る舞いです。
 
 - rdsh固有の先頭サブコマンド（`tokens`/`guard`/`serve`/`sessions`等）以外は、**引数を一字も変えず本家へexec委譲**します（`dsh --version`・`dsh --profile tui`・`dsh --help`は完全互換）
-- 本家の探索順： `RDSH_ORIG_BIN`（旧 `DSH_ORIG_BIN` も有効）→ `~/.config/rdsh/origin` → 退避ファイル（dsh-orig等）→ PATH（自分を除外）→ 既知npmパス
+- 本家の探索順： `RDSH_ORIG_BIN`（旧 `DSH_ORIG_BIN` も有効）→ `~/.config/rdsh/origin` → 退避ファイル（dsh-orig等）→ PATH（自分を除外）→ このOS・CPUに合う最新の `~/.local/opt/node-v*` ツリー
 - 命名は本家に準拠：コマンド・フラグはケバブケース（`dump-config`等）、`DSH_`環境変数名前空間は本家の所有とし、rdsh固有キーは `RDSH_` 配下に置きます
 - 一時退避： `RDSH_PASSTHROUGH=1 dsh ...`（slim無し）、`RDSH_DRY_RUN=1 dsh ...`（実行内容のみ表示）
+- slimは `NODE_COMPILE_CACHE` も付けます（Node 22.1以上のみ、利用者設定を優先、`RDSH_NODE_COMPILE_CACHE=0` で無効化）。本家dshは `RDSH_*` を読みません
+- 既定プロファイル： `RDSH_DEFAULT_PROFILE` → ローカルの `tui` → 案内付きエラーの順（dsh 0.2.0に `tui` テンプレートはありません）
 - 注意： `dsh tokens` のようにプロファイル名が予約語と衝突する場合は `dsh --profile tokens` で起動してください
 - Nodeラッパー： `node "$(... dsh ...)"` 形式のスクリプトは置換中に壊れます（`dsh`はJSではなくネイティブバイナリのため）。`node`経由ではなく `dsh`/`rdsh` を直接実行してください。対象は `rdsh doctor` が一覧表示します
 
@@ -208,6 +210,8 @@ rdsh serve
 | `GET /api/skills` / `/api/profiles` | 一覧 |
 
 外部依存はありません（標準ライブラリのみ＋単一HTML埋め込み、CDN不要・オフライン可）です。
+
+使い分け：`rdsh serve` は手元の簡易状態ページです。プロジェクトの指標・質問と回答・スマホ接続には、下の [Node.jsダッシュボード](dashboard/README.md) を使います。
 
 ### プロジェクト専用ダッシュボードとスマホ接続
 
