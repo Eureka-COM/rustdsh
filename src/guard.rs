@@ -168,9 +168,15 @@ mod tests {
     // #32 credential hygiene: narrow deny globs catch leaks, miss clean text.
     #[test]
     fn deny_credential_globs() {
-        assert!(wildcard_match("*.credentials.yaml*", "read $DSH_HOME/.credentials.yaml now"));
+        assert!(wildcard_match(
+            "*.credentials.yaml*",
+            "read $DSH_HOME/.credentials.yaml now"
+        ));
         assert!(wildcard_match("*AKIA*", "key AKIAIOSFODNN7EXAMPLE here"));
-        assert!(!wildcard_match("*.credentials.yaml*", "read the setup guide now"));
+        assert!(!wildcard_match(
+            "*.credentials.yaml*",
+            "read the setup guide now"
+        ));
     }
 
     // #33 external input: JSON values flatten, keys/scalars never match.
