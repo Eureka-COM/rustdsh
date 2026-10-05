@@ -309,6 +309,9 @@ request version. Only the human browser credential can call
 MCP and administrator credentials cannot grant approval; generic update routes
 cannot bypass this boundary. The approver is the authenticated `dashboard_owner`
 role, not a claim of a named person's identity. Decision history is retained.
+The approval row shows current decisions/reservations and expandable past request
+versions, including their scopes, decisions and uses. Past versions have no action
+buttons and cannot authorize the current request.
 
 Check or claim with the same task/repository/run/command/operation plus `id`,
 `request_version`, `attempt` (starting at one) and `cost_usd`. A check reserves

@@ -112,6 +112,8 @@ test("HTTP credentials cannot impersonate a human and concurrent claims cannot r
   const post = (route, input, headers) => fetch(dashboard.localUrl + "api/" + route, {
     method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(input),
   });
+  for (const route of ["policy/check", "approvals/request", "approvals/check", "approvals/claim", "workers/check"])
+    assert.equal((await post(route, request, {})).status, 401);
   assert.equal((await post("approvals/request", request, agent)).status, 200);
   const grant = { id: "R1", request_version: 1, decision: "grant" };
   assert.equal((await post("approvals/decide", grant, agent)).status, 401);
@@ -119,6 +121,8 @@ test("HTTP credentials cannot impersonate a human and concurrent claims cannot r
   assert.equal((await post("update/approval_decision", grant, admin)).status, 403);
   assert.equal((await post("approvals/check", use, agent)).status, 409);
   assert.equal((await post("approvals/decide", grant, human)).status, 200);
+  for (const headers of [admin, agent, human])
+    assert.equal((await post("approvals/check", use, headers)).status, 200);
   const claims = await Promise.all([post("approvals/claim", use, agent), post("approvals/claim", use, agent)]);
   assert.deepEqual(claims.map((response) => response.status).sort(), [200, 409]);
   assert.equal(currentRequest(dashboard.store.value, "R1").uses.length, 1);

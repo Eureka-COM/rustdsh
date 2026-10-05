@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   object, text, strings, version, filePath, directory, destination,
-  contains, activeContract, checkContract, digest,
+  contains, activeContract, checkContract, digest, storedDirectoryUnchanged,
 } from "./contracts.mjs";
 
 export const operationTools = ["file.read", "file.write", "process.exec", "network.request"];
@@ -88,7 +88,7 @@ export async function evaluateOperation(state, input) {
       if (!contains(contract.repository, resolved)) return result("block", "target_outside_repository");
       if (operation.tool === "file.read") {
         for (const root of policy.read_roots)
-          if (await directory(root, "read root") !== root) return result("block", "read_root_changed");
+          if (!await storedDirectoryUnchanged(root)) return result("block", "read_root_changed");
         if (!policy.read_roots.some((root) => contains(root, lexical) && contains(root, resolved)))
           return result("block", "read_outside_policy");
         if (!(await fs.stat(resolved)).isFile()) return result("unparsed", "read_target_not_file");

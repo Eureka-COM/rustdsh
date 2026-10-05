@@ -133,6 +133,11 @@ export async function prepareContract(state, input) {
   };
 }
 
+export async function storedDirectoryUnchanged(root) {
+  try { return await directory(root, "stored root") === root; }
+  catch { return false; }
+}
+
 export async function destination(value, cwd, repository) {
   filePath(value, "write path");
   const components = path.relative(repository, path.resolve(cwd, value)).split(path.sep).filter(Boolean);
@@ -177,7 +182,7 @@ export async function checkContract(state, input) {
     // Stored canonical roots must still resolve to themselves; retargeted links
     // cannot widen a contract that was saved earlier.
     for (const root of contract.write_roots)
-      if (await directory(root, "write root") !== root)
+      if (!await storedDirectoryUnchanged(root))
         return result("block", "write_root_changed", contract);
     for (const value of writes) {
       const lexical = path.resolve(cwd, filePath(value, "write path"));

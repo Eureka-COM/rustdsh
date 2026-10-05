@@ -45,6 +45,13 @@ test("contracts and approval scopes render as literal text; human choices bind r
       expires_at: "2026-10-06T00:00:00.000Z", source_ref: unsafe, uses: [], reserved_cost_microusd: 0,
     }] }],
   };
+  const previousApproval = structuredClone(state.approval_requests[0].versions[0]);
+  previousApproval.version = 2;
+  previousApproval.status = "revoked";
+  previousApproval.decisions = [{ decision: "revoke", approver: "dashboard_owner", authenticated_by: "human_browser_credential", decided_at: "fixture-time" }];
+  previousApproval.uses = [{ attempt: 1, reserved_cost_microusd: 500000, execution: "not_started", claimed_at: "fixture-time" }];
+  previousApproval.reserved_cost_microusd = 500000;
+  state.approval_requests[0].versions.unshift(previousApproval);
   const decisions = [];
   const source = await fs.readFile(new URL("../app.mjs", import.meta.url), "utf8");
   await vm.runInNewContext(`(async () => {\n${source}\n})()`, {
@@ -55,7 +62,7 @@ test("contracts and approval scopes render as literal text; human choices bind r
     fetch: async (route, options) => {
       if (route.endsWith("approvals/decide")) {
         decisions.push(JSON.parse(options.body));
-        state.approval_requests[0].versions[0].status = decisions.at(-1).decision === "grant" ? "granted" : "revoked";
+        state.approval_requests[0].versions.at(-1).status = decisions.at(-1).decision === "grant" ? "granted" : "revoked";
       }
       return {
       ok: true,
@@ -82,6 +89,11 @@ test("contracts and approval scopes render as literal text; human choices bind r
   assert.ok(approvals.some((node) => node.textContent === "元要求: " + unsafe));
   assert.ok(approvals.some((node) => node.textContent === "run / command: run-ui / command-ui"));
   assert.ok(approvals.every((node) => node.tag !== "img" && node.tag !== "script"));
+  assert.ok(approvals.some((node) => node.textContent === "過去の要求（1版）"));
+  assert.ok(approvals.some((node) => node.textContent === "v2: revoked（現在の操作には適用不可）"));
+  assert.ok(approvals.some((node) => node.textContent.includes("判断: revoke / dashboard_owner / human_browser_credential / fixture-time")));
+  assert.ok(approvals.some((node) => node.textContent.includes("予約: attempt 1 / $0.5 / not_started")));
+  assert.equal(approvals.filter((node) => node.tag === "button").length, 2);
   await approvals.find((node) => node.tag === "button" && node.textContent === "この操作範囲を承認").listeners.click();
   assert.deepEqual(decisions, [{ id: "R1", request_version: 3, decision: "grant" }]);
   approvals = descendants(elements.get("approvals"));

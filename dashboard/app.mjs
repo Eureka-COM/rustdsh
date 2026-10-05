@@ -61,6 +61,24 @@ function emptyRow(text, columns) {
   tr.append(cell);
   return tr;
 }
+function approvalScope(request) {
+  const element = node("div");
+  for (const [label, value] of [
+    ["task / 契約版", `${request.task_id} / v${request.contract_version}`],
+    ["run / command", `${request.run_id} / ${request.command_id}`],
+    ["操作", request.attributes.tool],
+    ["対象", request.attributes.path || request.attributes.executable || request.attributes.origin],
+    ["データhash", request.operation_digest],
+    ["上限", `$${request.limits.max_cost_usd} / ${request.limits.max_attempts} attempts`],
+    ["期限", request.expires_at], ["元要求", request.source_ref],
+    ["予約済み", `${request.uses.length} attempts / $${request.reserved_cost_microusd / 1000000}`],
+  ]) element.append(node("p", `${label}: ${value}`));
+  for (const decision of request.decisions || [])
+    element.append(node("p", `判断: ${decision.decision} / ${decision.approver} / ${decision.authenticated_by} / ${decision.decided_at}`));
+  for (const use of request.uses)
+    element.append(node("p", `予約: attempt ${use.attempt} / $${use.reserved_cost_microusd / 1000000} / ${use.execution} / ${use.claimed_at}`));
+  return element;
+}
 function render(state) {
   const m = state.metrics,
     done = state.tasks.filter((task) => task.status === "done").length,
@@ -172,16 +190,16 @@ function render(state) {
       const request = history.versions.at(-1);
       const element = node("article", undefined, "event");
       element.append(node("strong", `${history.id} v${request.version}: ${request.status}`));
-      for (const [label, value] of [
-        ["task / 契約版", `${request.task_id} / v${request.contract_version}`],
-        ["run / command", `${request.run_id} / ${request.command_id}`],
-        ["操作", request.attributes.tool],
-        ["対象", request.attributes.path || request.attributes.executable || request.attributes.origin],
-        ["データhash", request.operation_digest],
-        ["上限", `$${request.limits.max_cost_usd} / ${request.limits.max_attempts} attempts`],
-        ["期限", request.expires_at], ["元要求", request.source_ref],
-        ["予約済み", `${request.uses.length} attempts / $${request.reserved_cost_microusd / 1000000}`],
-      ]) element.append(node("p", `${label}: ${value}`));
+      element.append(approvalScope(request));
+      const past = history.versions.slice(0, -1).reverse();
+      if (past.length) {
+        const audit = node("details");
+        audit.append(node("summary", `過去の要求（${past.length}版）`));
+        for (const previous of past) {
+          audit.append(node("strong", `v${previous.version}: ${previous.status}（現在の操作には適用不可）`), approvalScope(previous));
+        }
+        element.append(audit);
+      }
       const error = node("div", undefined, "error");
       error.setAttribute("role", "alert");
       const choices = request.status === "pending" ? [["grant", "この操作範囲を承認"], ["reject", "拒否"]]

@@ -333,6 +333,10 @@ export async function startDashboard(options) {
         return res.end(svg);
       }
       if (kind === "project") {
+        if (req.method === "POST" && ["/api/policy/check", "/api/approvals/request", "/api/approvals/check",
+          "/api/approvals/claim", "/api/workers/check"].includes(route) &&
+          !(adminAuthorized || mcpAuthorized || humanAuthorized))
+          return json(res, 403, { error: "Project credential required" });
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, publicState(store.value));
         if (req.method === "POST" && route === "/api/contracts/update") {

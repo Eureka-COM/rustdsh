@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { ProjectStore } from "../state.mjs";
 import { evaluateOperation } from "../policy.mjs";
+import { checkContract } from "../contracts.mjs";
+import { checkWorkerStart } from "../enforcement.mjs";
 
 export async function policyFixture(t) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-policy-test-"));
@@ -64,6 +66,30 @@ test("structured policy distinguishes file, cwd, arguments and origins without e
     assert.equal(result.layers.pattern, "not_evaluated");
     assert.ok(!JSON.stringify(result).includes("dummy-secret"));
   }
+});
+
+test("deleted saved roots and executables are blocked as policy changes instead of unparsed caller input", async (t) => {
+  const { store, operation, project, src, contract } = await policyFixture(t);
+  const executable = path.join(project.root, "fixture-executable");
+  await fs.writeFile(executable, "not executed");
+  await store.mutate("contract", { ...contract, expected_version: 1, write_roots: [project.root],
+    operation_policy: { ...contract.operation_policy, executables: [{ file: executable, args: [] }] },
+  }, "local_administrator");
+  await fs.rm(src, { recursive: true, force: true });
+  const read = await evaluateOperation(store.value, { ...operation("file.read", { path: "src/input.txt" }), contract_version: 2 });
+  assert.equal(read.decision, "block");
+  assert.equal(read.reason, "read_root_changed");
+  const worker = { task_id: "T1", contract_version: 2, repository: project.root, run_id: "fixture-run", worker_role: "implementation" };
+  assert.equal((await checkWorkerStart(store.value, worker)).reason, "read_root_changed");
+  await fs.mkdir(src);
+  await fs.rm(executable);
+  assert.equal((await checkWorkerStart(store.value, worker)).reason, "executable_changed_or_unavailable");
+  await store.mutate("contract", { ...contract, expected_version: 2 }, "local_administrator");
+  await fs.rmdir(src);
+  const write = await checkContract(store.value, { task_id: "T1", contract_version: 3, repository: project.root,
+    cwd: project.root, write_paths: [] });
+  assert.equal(write.decision, "block");
+  assert.equal(write.reason, "write_root_changed");
 });
 
 test("policy audit survives restart and contains no raw arguments, request body or URL query", async (t) => {
