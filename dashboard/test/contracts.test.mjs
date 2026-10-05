@@ -6,8 +6,10 @@ import path from "node:path";
 import { ProjectStore, writeJson } from "../state.mjs";
 import { activeContract, checkContract } from "../contracts.mjs";
 
-async function fixture(t) {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-contract-test-"));
+async function fixture(t, tempParent = os.tmpdir()) {
+  // Runner TEMP itself can be a junction; derive every fixture path from the
+  // same canonical directory as the contract instead of mixing aliases.
+  const temp = await fs.realpath(await fs.mkdtemp(path.join(tempParent, "rdsh-contract-test-")));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const root = path.join(temp, "repo");
   const outside = path.join(temp, "repo-other");
@@ -152,19 +154,28 @@ test("dangling symlink input is unresolved rather than a writable missing leaf",
   await fs.unlink(link);
 });
 
-test("a realpath result for a missing junction target remains unresolved without rejecting normal missing leaves", async (t) => {
-  const { store, input, check, src, root } = await fixture(t);
+test("a junction-backed temporary directory keeps fixture paths canonical and scope checks strict", async (t) => {
+  const staging = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-temp-alias-test-"));
+  const target = path.join(staging, "target"), alias = path.join(staging, "alias");
+  await fs.mkdir(target);
+  await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
+  t.after(async () => {
+    await fs.unlink(alias);
+    await fs.rm(staging, { recursive: true, force: true });
+  });
+  const { store, input, check, src, root, temp } = await fixture(t, alias);
   await store.mutate("contract", input, "local_administrator");
-  const target = path.join(root, "missing-target"), link = path.join(src, "dangling");
-  await fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
-  const realpath = fs.realpath.bind(fs);
-  // Reproduce the Windows/Node 22 junction behavior independently of the
-  // local runtime: a canonical target string is returned even when absent.
-  t.mock.method(fs, "realpath", async (file, ...args) =>
-    path.resolve(file) === path.resolve(link) ? target : realpath(file, ...args));
+  const link = path.join(src, "dangling");
+  await fs.symlink(path.join(root, "missing-target"), link, process.platform === "win32" ? "junction" : "dir");
   const unresolved = await checkContract(store.value, { ...check, write_paths: [path.join(link, "file.txt")] });
   assert.equal(unresolved.decision, "unparsed");
   assert.equal(unresolved.reason, "unsupported_or_unresolved_input");
+  assert.equal(src, path.join(root, "src"));
+  assert.equal(await fs.realpath(src), src);
   assert.equal((await checkContract(store.value, check)).decision, "within_scope");
+  const aliasedWrite = path.join(alias, path.basename(temp), "repo", "src", "file.txt");
+  const outside = await checkContract(store.value, { ...check, write_paths: [aliasedWrite] });
+  assert.equal(outside.decision, "block");
+  assert.equal(outside.reason, "write_outside_contract");
   await fs.unlink(link);
 });

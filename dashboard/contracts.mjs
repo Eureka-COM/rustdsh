@@ -150,11 +150,9 @@ export async function destination(value, cwd, repository) {
       if (error.code !== "ENOENT") throw error;
       return path.join(current, ...components.slice(index));
     }
-    // A junction's realpath can return its absent target on Windows. Verify
-    // existence before classifying scope; ordinary missing leaves returned above
-    // remain supported. Check every prefix so links cannot leave and reenter.
+    // A dangling link fails here. Check each existing prefix so a link leaving
+    // the repo cannot reenter it through a second link and appear in scope.
     current = await fs.realpath(candidate);
-    await fs.stat(current);
     if (!contains(repository, current)) return current;
   }
   return current;
