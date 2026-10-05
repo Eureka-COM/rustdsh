@@ -334,15 +334,15 @@ fn load_doc(path: &str) -> CredsDoc {
         Ok(t) => t,
         Err(_) => return doc,
     };
-    doc.text = text;
-    let lines: Vec<String> = doc.text.lines().map(|l| l.to_string()).collect();
+    // Iterate the buffer directly: copying every line into a Vec<String>
+    // just to parse it was an allocation per line for no benefit.
     let mut section = "";
     let mut cur_key = String::new();
     let mut cur_kind = String::new();
     let mut cur_access: Option<String> = None;
     let mut cur_expires: Option<i64> = None;
     let mut in_payload = false;
-    for line in &lines {
+    for line in text.lines() {
         let ind = indent_of(line);
         let t: &str = line.trim();
         if t.is_empty() || t.starts_with('#') {
@@ -414,6 +414,7 @@ fn load_doc(path: &str) -> CredsDoc {
         &cur_access,
         cur_expires,
     );
+    doc.text = text;
     if doc.text.trim().is_empty() {
         doc.version_ok = true;
     }
