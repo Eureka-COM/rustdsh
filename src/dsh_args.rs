@@ -24,7 +24,7 @@ pub fn split_launcher_args(profile_flag: Option<String>, extra: Vec<String>) -> 
     if extra.first().map(|s| s.as_str()) == Some("plugin") {
         let mut profile = profile_flag;
         let mut pnpm: Vec<String> = vec![];
-        let mut it = extra.into_iter().skip(1).peekable();
+        let mut it = extra.into_iter().skip(1);
         while let Some(a) = it.next() {
             if a == "--profile" {
                 profile = it.next();
@@ -55,7 +55,7 @@ pub fn split_launcher_args(profile_flag: Option<String>, extra: Vec<String>) -> 
     let mut dump_schema = false;
     let mut app_args: Vec<String> = vec![];
     let mut positional: Vec<String> = vec![];
-    let mut it = extra.into_iter().peekable();
+    let mut it = extra.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-h" | "--help" if profile.is_none() && positional.is_empty() => return Launcher::Help,

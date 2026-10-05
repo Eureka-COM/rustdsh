@@ -346,15 +346,15 @@ fn load_doc(path: &str) -> CredsDoc {
         Ok(t) => t,
         Err(_) => return doc,
     };
-    doc.text = text;
-    let lines: Vec<String> = doc.text.lines().map(|l| l.to_string()).collect();
+    // Iterate the buffer directly: copying every line into a Vec<String>
+    // just to parse it was an allocation per line for no benefit.
     let mut section = "";
     let mut cur_key = String::new();
     let mut cur_kind = String::new();
     let mut cur_access: Option<String> = None;
     let mut cur_expires: Option<i64> = None;
     let mut in_payload = false;
-    for line in &lines {
+    for line in text.lines() {
         let ind = indent_of(line);
         let t: &str = line.trim();
         if t.is_empty() || t.starts_with('#') {
@@ -426,6 +426,7 @@ fn load_doc(path: &str) -> CredsDoc {
         &cur_access,
         cur_expires,
     );
+    doc.text = text;
     if doc.text.trim().is_empty() {
         doc.version_ok = true;
     }
@@ -590,14 +591,20 @@ fn fresher_than(source: &OauthGrant, stored: &StoredGrant, creds_mtime: u64) -> 
     }
 }
 
-fn plan() -> (
-    Vec<OauthGrant>,
-    Vec<ApiKey>,
-    Vec<String>,
-    CredsDoc,
-    Vec<Decision>,
-    String,
-) {
+/// One snapshot of the external-login stores and the credentials file.
+/// Computed once per command and shared by every consumer (the old 6-tuple
+/// plan() was re-run up to 3 times per invocation by cmd_auth/cmd_setup/
+/// setup_status_json/exec_boot — each scan is a full file crawl + parse).
+struct Scan {
+    grants: Vec<OauthGrant>,
+    keys: Vec<ApiKey>,
+    notes: Vec<String>,
+    doc: CredsDoc,
+    decisions: Vec<Decision>,
+    path: String,
+}
+
+fn scan() -> Scan {
     let mut grants: Vec<OauthGrant> = Vec::new();
     let mut keys: Vec<ApiKey> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
@@ -608,15 +615,15 @@ fn plan() -> (
     let creds_mtime = mtime_ms(&path);
 
     let mut best: HashMap<String, OauthGrant> = HashMap::new();
-    for g in grants.clone() {
+    for g in &grants {
         match best.get(&g.provider) {
             Some(cur) => {
                 if g.expires.unwrap_or(0) > cur.expires.unwrap_or(0) {
-                    best.insert(g.provider.clone(), g);
+                    best.insert(g.provider.clone(), g.clone());
                 }
             }
             None => {
-                best.insert(g.provider.clone(), g);
+                best.insert(g.provider.clone(), g.clone());
             }
         }
     }
@@ -624,7 +631,7 @@ fn plan() -> (
     providers.sort();
     let mut decisions = Vec::new();
     for p in providers {
-        let g = best[&p].clone();
+        let g = best.remove(&p).unwrap();
         let key = format!("{RECORD_SCOPE}/{p}");
         match doc.grants.get(&key) {
             Some(stored) if stored.kind != "grant" => decisions.push(Decision {
@@ -673,7 +680,14 @@ fn plan() -> (
             }
         }
     }
-    (grants, keys, notes, doc, decisions, path)
+    Scan {
+        grants,
+        keys,
+        notes,
+        doc,
+        decisions,
+        path,
+    }
 }
 
 fn autosync_enabled() -> bool {
@@ -681,18 +695,23 @@ fn autosync_enabled() -> bool {
 }
 
 /// Best-effort mirror before delegating to dsh (boot/dump/plugin/raw).
-/// Never fails: a broken store must not break launching.
-pub fn auto_sync() {
-    if !autosync_enabled() {
-        return;
+/// Never fails: a broken store must not break launching. When `banner` is
+/// set, a no-connection state also prints the first-run guidance once —
+/// both from a single `scan()`, instead of re-crawling the stores.
+pub fn pre_boot(banner: bool) {
+    let s = scan();
+    if autosync_enabled() {
+        let _ = apply_imports(&s, true);
     }
-    let _ = apply_imports(true);
+    if banner && setup_needed_in(&s) {
+        print_first_boot_banner();
+    }
 }
 
-/// Import missing-or-older grants/refs. Quiet mode stays silent unless it
-/// actually writes (used by auto_sync before boot).
-fn apply_imports(quiet: bool) -> anyhow::Result<Vec<String>> {
-    let (_grants, keys, _notes, doc, decisions, path) = plan();
+/// Import missing-or-older grants/refs from a pre-computed scan. Quiet mode
+/// stays silent unless it actually writes (used by pre_boot before boot).
+fn apply_imports(s: &Scan, quiet: bool) -> anyhow::Result<Vec<String>> {
+    let (keys, doc, decisions, path) = (&s.keys, &s.doc, &s.decisions, &s.path);
     if !doc.text.is_empty() && !doc.version_ok {
         if !quiet {
             eprintln!("[rdsh auth] refuse: {path} uses the pre-release flat layout; add `version: 1` first");
@@ -726,7 +745,7 @@ fn apply_imports(quiet: bool) -> anyhow::Result<Vec<String>> {
             }
         }
     }
-    for k in &keys {
+    for k in keys {
         if doc.refs.contains_key(&k.name) {
             continue;
         }
@@ -747,50 +766,64 @@ fn apply_imports(quiet: bool) -> anyhow::Result<Vec<String>> {
     if done.is_empty() {
         return Ok(done);
     }
-    write_creds(&path, &text)?;
+    write_creds(path, &text)?;
     for d in &done {
         eprintln!("[rdsh auth] {d} -> {path}");
     }
     Ok(done)
 }
 
+/// Source stores that produced grants, as JSON (shared by `auth --json` and
+/// the setup UI status).
+fn sources_json(s: &Scan) -> Vec<serde_json::Value> {
+    let h = home().unwrap_or_default();
+    let mut sources = Vec::new();
+    if s.grants.iter().any(|g| g.from == "codex") {
+        sources.push(serde_json::json!({"name":"codex","path": format!("{h}/.codex/auth.json")}));
+    }
+    if s.grants.iter().any(|g| g.from == "opencode") {
+        let d = data_dir().unwrap_or_default();
+        sources
+            .push(serde_json::json!({"name":"opencode","path": format!("{d}/opencode/auth.json")}));
+    }
+    sources
+}
+
+fn records_json(s: &Scan) -> Vec<serde_json::Value> {
+    s.decisions
+        .iter()
+        .map(|d| {
+            serde_json::json!({"provider": d.provider, "from": d.from, "action": d.action, "detail": d.detail})
+        })
+        .collect()
+}
+
+/// Whether the credentials file blocks an import (pre-release flat layout).
+fn layout_refused(s: &Scan) -> bool {
+    !s.doc.text.is_empty() && !s.doc.version_ok
+}
+
 pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
-    let (grants, keys, notes, doc, decisions, path) = plan();
+    let s = scan();
+    let (grants, keys, notes, doc, decisions, path) =
+        (&s.grants, &s.keys, &s.notes, &s.doc, &s.decisions, &s.path);
     let wrote = if import {
-        if !doc.text.is_empty() && !doc.version_ok {
+        if layout_refused(&s) {
             anyhow::bail!(
                 "refuse: {path} uses the pre-release flat layout; add `version: 1` first"
             );
         }
-        apply_imports(false)?
+        apply_imports(&s, false)?
     } else {
         vec![]
     };
     if json {
-        let h = home().unwrap_or_default();
-        let mut sources = Vec::new();
-        if grants.iter().any(|g| g.from == "codex") {
-            sources
-                .push(serde_json::json!({"name":"codex","path": format!("{h}/.codex/auth.json")}));
-        }
-        if grants.iter().any(|g| g.from == "opencode") {
-            let d = data_dir().unwrap_or_default();
-            sources.push(
-                serde_json::json!({"name":"opencode","path": format!("{d}/opencode/auth.json")}),
-            );
-        }
-        let recs: Vec<serde_json::Value> = decisions
-            .iter()
-            .map(|d| {
-                serde_json::json!({"provider": d.provider, "from": d.from, "action": d.action, "detail": d.detail})
-            })
-            .collect();
         println!(
             "{}",
             serde_json::json!({
                 "credentials": path,
-                "sources": sources,
-                "records": recs,
+                "sources": sources_json(&s),
+                "records": records_json(&s),
                 "refs_known": keys.iter().map(|k| &k.name).collect::<Vec<_>>(),
                 "notes": notes,
                 "wrote": wrote,
@@ -803,7 +836,7 @@ pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
         println!("[rdsh auth] no external logins found (checked ~/.codex/auth.json, <data>/opencode/auth.json)");
         println!("[rdsh auth] first time here? `rdsh setup` walks you through the connect");
     }
-    for g in &grants {
+    for g in grants {
         let exp = g
             .expires
             .map(|e| e.to_string())
@@ -813,7 +846,7 @@ pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
             g.from, g.provider, exp
         );
     }
-    for k in &keys {
+    for k in keys {
         let have = doc.refs.contains_key(&k.name);
         println!(
             "[rdsh auth] source {}: ref {} ({})",
@@ -826,12 +859,12 @@ pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
             }
         );
     }
-    for d in &decisions {
+    for d in decisions {
         println!("[rdsh auth] {}: {}", d.provider, d.detail);
     }
     // What the dsh GUI model picker boots by default, and whether its
     // credential is already here (auto-detected from profile patches).
-    for need in provider_needs() {
+    for need in provider_needs(&s) {
         let mark = match need.state {
             "ok" => "credential ok",
             "importable" => "credential importable: run `rdsh auth --import`",
@@ -842,7 +875,7 @@ pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
             need.profile, need.provider, need.model, need.via, mark
         );
     }
-    for n in &notes {
+    for n in notes {
         println!("[rdsh auth] note: {n}");
     }
     if !doc.text.is_empty() && !doc.version_ok {
@@ -863,7 +896,8 @@ pub fn cmd_auth(import: bool, json: bool) -> anyhow::Result<()> {
 
 /// One line for `rdsh doctor` (never fails).
 pub fn summary_line() -> String {
-    let (_grants, keys, _notes, doc, decisions, _path) = plan();
+    let s = scan();
+    let (keys, doc, decisions) = (&s.keys, &s.doc, &s.decisions);
     if decisions.is_empty() && keys.is_empty() {
         return "no external logins found (codex/opencode)".to_string();
     }
@@ -871,7 +905,7 @@ pub fn summary_line() -> String {
         .iter()
         .map(|d| format!("{}={} [{}]", d.provider, d.action, d.from))
         .collect();
-    for k in &keys {
+    for k in keys {
         parts.push(format!(
             "{}={}",
             k.name,
@@ -926,8 +960,8 @@ fn env_key_set(name: &str) -> bool {
 /// True when no model credential is visible anywhere: no external OAuth
 /// logins, no known API-key env vars, and nothing stored yet. This is the
 /// "first boot demands a DeepSeek connection and I have no idea why" state.
-pub fn setup_needed() -> bool {
-    let (grants, keys, _notes, doc, _decisions, _path) = plan();
+fn setup_needed_in(s: &Scan) -> bool {
+    let (grants, keys, doc) = (&s.grants, &s.keys, &s.doc);
     if !grants.is_empty() || !keys.is_empty() {
         return false;
     }
@@ -937,12 +971,9 @@ pub fn setup_needed() -> bool {
     !KNOWN_ENV_KEYS.iter().any(|k| env_key_set(k))
 }
 
-/// Short first-boot banner printed to stderr before delegation (never fails,
-/// never blocks: the boot continues into dsh either way).
-pub fn first_boot_banner() {
-    if !setup_needed() {
-        return;
-    }
+/// First-boot banner text printed to stderr (the decision to show it is made
+/// by `pre_boot` from the same scan, so the stores are not crawled twice).
+fn print_first_boot_banner() {
     if is_japanese() {
         eprintln!("[rdsh] モデル接続がまだありません（初回セットアップが必要です）");
         eprintln!(
@@ -1141,8 +1172,8 @@ pub struct ProviderNeed {
 /// an OAuth record, a fresher external grant (`importable`), or the
 /// provider block's `apiKeyEnv` ref/env. This is the "detect what dsh
 /// will use and bring it over" half of first-run setup.
-pub fn provider_needs() -> Vec<ProviderNeed> {
-    let (grants, keys, _notes, doc, _decisions, _path) = plan();
+fn provider_needs(s: &Scan) -> Vec<ProviderNeed> {
+    let (grants, keys, doc) = (&s.grants, &s.keys, &s.doc);
     let root = format!("{}/profiles", crate::inspect::dsh_home());
     let mut profiles: Vec<String> = std::fs::read_dir(&root)
         .map(|e| {
@@ -1307,14 +1338,19 @@ fn print_guide() {
 /// the provider login flow or reveal settings dirs, otherwise print the
 /// exact next step. Safe non-interactive: prompts only fire on a TTY.
 pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool) -> anyhow::Result<()> {
-    let _ = apply_imports(json);
+    // One scan drives the import, the env-key loop, and the "needed" verdict.
+    let mut s = scan();
+    let _ = apply_imports(&s, json);
     let mut persisted: Vec<String> = Vec::new();
+    // Refs already stored: seeded from the scan, extended as we write (the
+    // old code re-read the credentials file once per env key).
+    let mut known_refs: std::collections::HashSet<String> = s.doc.refs.keys().cloned().collect();
     for k in KNOWN_ENV_KEYS {
         let v = match std::env::var(k) {
             Ok(v) if !v.trim().is_empty() => v,
             _ => continue,
         };
-        if load_doc(&creds_path()).refs.contains_key(*k) {
+        if known_refs.contains(*k) {
             continue;
         }
         let take = yes
@@ -1322,17 +1358,21 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool) -> anyhow::Resu
                 "[rdsh setup] save {k} from the environment into credentials? [y/N] "
             ));
         if take && store_ref(k, v.trim())? {
+            known_refs.insert(k.to_string());
             persisted.push(k.to_string());
         }
     }
     {
         use std::io::IsTerminal as _;
-        if !yes && std::io::stdin().is_terminal() && setup_needed() {
+        if !yes && std::io::stdin().is_terminal() && setup_needed_in(&s) {
             if let Some(pasted) = prompt_line(
                 "[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input is echoed): ",
             ) {
                 match store_ref("DEEPSEEK_API_KEY", &pasted) {
-                    Ok(true) => persisted.push("DEEPSEEK_API_KEY".to_string()),
+                    Ok(true) => {
+                        known_refs.insert("DEEPSEEK_API_KEY".to_string());
+                        persisted.push("DEEPSEEK_API_KEY".to_string());
+                    }
                     Ok(false) => {}
                     Err(e) => eprintln!("[rdsh setup] could not store key: {e:#}"),
                 }
@@ -1342,12 +1382,16 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool) -> anyhow::Resu
     let mut login_run = false;
     if login {
         login_run = launch_login();
-        let _ = apply_imports(json);
+        // The provider flow may have written new stores; rescan and import.
+        s = scan();
+        let _ = apply_imports(&s, json);
     }
     if open {
         open_settings_dirs(json);
     }
-    let needed = setup_needed();
+    // `needed` reflects the post-import state: a key stored during this run
+    // counts as a credential (the old code got this by rescanning the file).
+    let needed = setup_needed_in(&s) && persisted.is_empty();
     if json {
         println!(
             "{}",
@@ -1372,33 +1416,18 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool) -> anyhow::Resu
 /// Status document for the floating setup UI (`rdsh setup --web`).
 /// Read-only and secret-free: refs appear by name only, never by value.
 pub fn setup_status_json() -> String {
-    let (grants, keys, notes, doc, decisions, path) = plan();
-    let h = home().unwrap_or_default();
-    let mut sources = Vec::new();
-    if grants.iter().any(|g| g.from == "codex") {
-        sources.push(serde_json::json!({"name":"codex","path": format!("{h}/.codex/auth.json")}));
-    }
-    if grants.iter().any(|g| g.from == "opencode") {
-        let d = data_dir().unwrap_or_default();
-        sources
-            .push(serde_json::json!({"name":"opencode","path": format!("{d}/opencode/auth.json")}));
-    }
-    let recs: Vec<serde_json::Value> = decisions
-        .iter()
-        .map(|d| {
-            serde_json::json!({"provider": d.provider, "from": d.from, "action": d.action, "detail": d.detail})
-        })
-        .collect();
+    let s = scan();
+    let (keys, doc, path) = (&s.keys, &s.doc, &s.path);
     serde_json::json!({
         "credentials": path,
-        "sources": sources,
-        "records": recs,
+        "sources": sources_json(&s),
+        "records": records_json(&s),
         "refs_known": keys.iter().map(|k| &k.name).collect::<Vec<_>>(),
         "refs_stored": doc.refs.keys().cloned().collect::<Vec<_>>(),
-        "notes": notes,
-        "needed": setup_needed(),
+        "notes": &s.notes,
+        "needed": setup_needed_in(&s),
         "opencode_config": opencode_config_path(),
-        "defaults": provider_needs()
+        "defaults": provider_needs(&s)
             .iter()
             .map(|n| {
                 serde_json::json!({"profile": n.profile, "provider": n.provider, "model": n.model, "via": n.via, "state": n.state})

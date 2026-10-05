@@ -551,7 +551,12 @@ fn print_help() {
 
 fn dump_config_native(profile: &str, patches: &[String]) -> anyhow::Result<()> {
     let home = crate::inspect::dsh_home();
-    println!("{{\"profile\": \"{profile}\", \"dsh_home\": \"{home}\", \"patches\": {patches:?}}}");
+    // Debug-format {:?} prints like JSON here but doesn't escape the same
+    // way; emit a real JSON array so consumers can actually parse it.
+    let patches_json = serde_json::json!(patches);
+    println!(
+        "{{\"profile\": \"{profile}\", \"dsh_home\": \"{home}\", \"patches\": {patches_json}}}"
+    );
     let root = format!("{home}/profiles/{profile}");
     match std::fs::read_dir(&root) {
         Ok(entries) => {
@@ -598,7 +603,8 @@ fn doctor() -> anyhow::Result<()> {
         say(format!("[rdsh] dsh version: {v}"));
     }
     say(format!("[rdsh] smart-dsh: {}", smart_dsh_status(&home)));
-    if shadowing_original() {
+    let shadowed = shadowing_original();
+    if shadowed {
         say(
             "[rdsh] note: 'dsh' currently resolves to rdsh; Smart-DSH scripts that locate"
                 .to_string(),
@@ -608,7 +614,7 @@ fn doctor() -> anyhow::Result<()> {
                 .to_string(),
         );
     }
-    for w in node_wrapper_warnings() {
+    for w in node_wrapper_warnings(shadowed) {
         say(w);
     }
     say("[rdsh] note: dsh web GUI and `rdsh serve` both default to 3080; co-use with".to_string());
@@ -667,7 +673,7 @@ fn smart_dsh_status(home: &str) -> String {
 /// Wrappers that run `node` on the `dsh` path break once `dsh` is shadowed by
 /// the native binary (Node tries to parse the ELF as JS). Scan the local bin
 /// dir for text files mentioning both and point at the offending wrappers.
-fn node_wrapper_warnings() -> Vec<String> {
+fn node_wrapper_warnings(shadowed: bool) -> Vec<String> {
     let Some(home) = crate::inspect::home_dir() else {
         return vec![];
     };
@@ -696,7 +702,6 @@ fn node_wrapper_warnings() -> Vec<String> {
         }
     }
     hits.sort();
-    let shadowed = shadowing_original();
     hits.into_iter()
         .map(|name| {
             if shadowed {
@@ -768,7 +773,8 @@ fn summarize(v: &[std::time::Duration]) -> String {
 
 #[cfg(test)]
 mod default_profile_tests {
-    use super::pick_default_profile;
+    use super::{pick_default_profile, Cli};
+    use clap::Parser;
 
     #[test]
     fn env_wins() {
@@ -787,5 +793,25 @@ mod default_profile_tests {
         let err = pick_default_profile(None, false).unwrap_err();
         assert!(err.contains("RDSH_DEFAULT_PROFILE"), "{err}");
         assert!(err.contains("--profile"), "{err}");
+    }
+
+    /// NATIVE_FIRST (used by dsh-shadowed dispatch) and the clap Commands
+    /// enum must never drift apart: a missing name silently delegates a
+    /// native subcommand to dsh instead of running it here.
+    #[test]
+    fn native_first_matches_subcommands() {
+        use clap::error::ErrorKind;
+        for name in crate::NATIVE_FIRST {
+            // Some subcommands require positional args (e.g. `search`), so a
+            // bare-name parse may legitimately fail — but never with
+            // InvalidSubcommand, which is what a missing Commands entry yields.
+            if let Err(e) = Cli::try_parse_from(["rdsh", name]) {
+                assert_ne!(
+                    e.kind(),
+                    ErrorKind::InvalidSubcommand,
+                    "NATIVE_FIRST entry {name:?} has no matching subcommand"
+                );
+            }
+        }
     }
 }
