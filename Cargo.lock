@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "rdsh"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "clap",

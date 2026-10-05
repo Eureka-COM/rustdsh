@@ -94,4 +94,20 @@ if [ -x "$BIN" ]; then
   rm -rf "$CSB"
 fi
 
+# Settings-as-defaults (Lead): sandboxed rdsh.json overrides CLI defaults.
+if [ -x "$BIN" ]; then
+  OSB="$(mktemp -d 2>/dev/null || mktemp -d -t rdsh-settings-override)"
+  mkdir -p "$OSB/dsh" "$OSB/work"
+  printf "%s" "{\"tokens\":{\"default_budget\":500}}" > "$OSB/dsh/rdsh.json"
+  if python3 -c 'print("a " * 6000)' | HOME="$OSB" DSH_HOME="$OSB/dsh" "$BIN" prune 2>/dev/null | grep -q "pruned"; then ok "settings override prune budget"; else echo "FAIL: prune override"; exit 1; fi
+  printf "hit\nhit\nhit\nhit\nhit\n" > "$OSB/work/a.txt"
+  printf "%s" "{\"search\":{\"dir\":\"$OSB/work\",\"max\":2}}" > "$OSB/dsh/rdsh.json"
+  if HOME="$OSB" DSH_HOME="$OSB/dsh" "$BIN" search hit --dir "$OSB/work" 2>/dev/null | grep -c "a.txt" | grep -q "^2$"; then ok "settings override search max"; else echo "FAIL: search max override"; exit 1; fi
+  printf "%s" "{\"guard\":{\"deny\":[\"nope*\"]}}" > "$OSB/dsh/rdsh.json"
+  if printf "nope-test" | HOME="$OSB" DSH_HOME="$OSB/dsh" "$BIN" guard >/dev/null 2>&1; then echo "FAIL: guard deny override"; exit 1; else ok "settings override guard deny"; fi
+  printf "%s" "{\"beta\":{\"context_engine\":false}}" > "$OSB/dsh/rdsh.json"
+  if HOME="$OSB" DSH_HOME="$OSB/dsh" "$BIN" context status >/dev/null 2>&1; then echo "FAIL: beta gate"; exit 1; else ok "beta gate disables context"; fi
+  rm -rf "$OSB"
+fi
+
 echo "settings-prototype: ALL PASS ($pass)"
