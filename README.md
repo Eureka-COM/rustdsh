@@ -3,6 +3,8 @@
 # rdsh — a fast, safe Rust launcher for `dsh`
 
 [![ci](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml)
+[![dashboard](https://github.com/sahenjp/rustdsh/actions/workflows/dashboard.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/dashboard.yml)
+[![docs](https://github.com/sahenjp/rustdsh/actions/workflows/docs.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/docs.yml)
 [![release](https://img.shields.io/github/v/release/sahenjp/rustdsh.svg)](https://github.com/sahenjp/rustdsh/releases)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.73%2B-orange.svg)](https://www.rust-lang.org/)
@@ -31,6 +33,7 @@ to Rust and delegates everything else to the original `dsh` binary** — so you 
 - [How it got fast](#how-it-got-fast)
 - [Project layout](#project-layout)
 - [Contributing](#contributing)
+- [Community](#community)
 - [FAQ](#faq)
 - [Credits](#credits)
 - [License](#license)
@@ -354,6 +357,17 @@ dumps, missing `--profile`) are reproduced in Rust.
 - `src/setup_web.rs` + `src/setup.html` — floating glass setup UI (`setup --web`)
 - `install.sh` — installer (`--as-dsh` shadow / `--restore`)
 - `tests/regress.sh` — CLI regression suite (CLI checks)
+
+## Community
+
+- Start with [CONTRIBUTING.md](CONTRIBUTING.md) (4-line PRs, screenshot rules).
+- Bugs and ideas: [issue forms](https://github.com/sahenjp/rustdsh/issues/new/choose) (Japanese OK).
+- Questions: [Discussions](https://github.com/sahenjp/rustdsh/discussions).
+- Security: never file public issues — see [SECURITY.md](SECURITY.md).
+- Design docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
+  [docs/BENCHMARKS.md](docs/BENCHMARKS.md) · [docs/ROADMAP.md](docs/ROADMAP.md) ·
+  [docs/RELEASING.md](docs/RELEASING.md) · [CHANGELOG.md](CHANGELOG.md).
+- Be kind: [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Contributing
 

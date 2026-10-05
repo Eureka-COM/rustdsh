@@ -1,0 +1,11 @@
+# Default owners for everything.
+* @sahenjp
+
+# Rust launcher core.
+/src/ @sahenjp
+
+# Dashboard and releases need extra care.
+/dashboard/ @sahenjp
+/.github/workflows/cd.yml @sahenjp
+/install.sh @sahenjp
+/install.ps1 @sahenjp

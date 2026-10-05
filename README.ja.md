@@ -2,6 +2,12 @@
 
 [English](README.md)
 
+[![ci](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml)
+[![dashboard](https://github.com/sahenjp/rustdsh/actions/workflows/dashboard.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/dashboard.yml)
+[![docs](https://github.com/sahenjp/rustdsh/actions/workflows/docs.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/docs.yml)
+[![release](https://img.shields.io/github/v/release/sahenjp/rustdsh.svg)](https://github.com/sahenjp/rustdsh/releases)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 <img src="assets/icon.svg" width="96" alt="rdsh icon">
 
 フル移植ではなく**ホットパスだけ Rust 化＋残りは本家 dsh に委譲**する設計です。
@@ -22,6 +28,7 @@
 - [安全設計](#安全設計)
 - [高速化の仕組み](#高速化の仕組み)
 - [構成](#構成)
+- [コミュニティ](#コミュニティ)
 - [よくある質問](#よくある質問)
 - [クレジット](#クレジット)
 - [ライセンス](#ライセンス)
@@ -305,6 +312,16 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 - `src/setup_web.rs`＋`src/setup.html` — フローティングのセットアップUI（`setup --web`）
 - `install.sh` — 導入（`--as-dsh`置換／`--restore`復元）
 - `tests/regress.sh` — CLI回帰試験（CLI回帰検査）
+
+## コミュニティ
+
+- まず [CONTRIBUTING.md](CONTRIBUTING.md)（PRは4行、スクリーンショット規定）。
+- バグ・要望：[Issueフォーム](https://github.com/sahenjp/rustdsh/issues/new/choose)（日本語OK）。
+- 質問・相談：[Discussions](https://github.com/sahenjp/rustdsh/discussions)。
+- 脆弱性は公開Issueに書かず [SECURITY.md](SECURITY.md) へ。
+- 設計資料：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)・
+  [docs/BENCHMARKS.md](docs/BENCHMARKS.md)・[docs/ROADMAP.md](docs/ROADMAP.md)・
+  [docs/RELEASING.md](docs/RELEASING.md)・[CHANGELOG.md](CHANGELOG.md)。
 
 ## よくある質問
 
