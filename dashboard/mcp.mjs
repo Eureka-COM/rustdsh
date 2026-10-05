@@ -89,6 +89,18 @@ export const tools = [
       "Read this project’s metrics, tasks, questions, and recent events.",
     inputSchema: object({}),
   },
+  {
+    name: "dashboard_check_task_contract",
+    description:
+      "Check declared repository, cwd and write paths against the current task contract before an operation. Only within_scope passes this preflight; block and unparsed must stop. This does not grant approval, parse commands, or enforce an OS sandbox. Recheck immediately before use; contracts can change.",
+    inputSchema: object({
+      task_id: string,
+      contract_version: { type: "integer", minimum: 1 },
+      repository: string,
+      cwd: string,
+      write_paths: { type: "array", maxItems: 100, items: string },
+    }, ["task_id", "contract_version", "repository", "cwd", "write_paths"]),
+  },
 ];
 const routes = {
   dashboard_update_metrics: "metrics",
@@ -98,6 +110,7 @@ const routes = {
 };
 export async function executeTool(api, name, args = {}) {
   if (name === "dashboard_get_state") return await api.getState();
+  if (name === "dashboard_check_task_contract") return await api.checkContract(args);
   if (name === "dashboard_get_feedback")
     return feedbackSince(await api.getState(), args.after ?? 0);
   if (routes[name]) {
@@ -207,13 +220,14 @@ export async function runStdio(project) {
       signal: AbortSignal.timeout(10000),
     });
     const result = await response.json();
-    if (!response.ok)
+    if (!response.ok && !(route === "api/contracts/check" && response.status === 409))
       throw new Error(result.error || `HTTP ${response.status}`);
     return result;
   }
   const mcp = createMcpServer({
     getState: () => request("api/state"),
     mutate: (operation, input) => request(`api/update/${operation}`, input),
+    checkContract: (input) => request("api/contracts/check", input),
   });
   await mcp.server.connect(new StdioServerTransport());
   // Resource subscribers receive change notifications; disconnected clients can recover with cursors.

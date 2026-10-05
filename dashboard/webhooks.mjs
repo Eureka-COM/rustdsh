@@ -75,6 +75,7 @@ const names = [
   "dashboard.task.updated",
   "dashboard.progress.updated",
   "dashboard.metrics.updated",
+  "dashboard.contract.updated",
 ];
 export const eventDefinitions = names.map((name) => ({
   name,

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { prepareContract } from "./contracts.mjs";
 
 export const metricNames = [
   "total_cost_usd",
@@ -69,6 +70,7 @@ export class ProjectStore {
         updated_at: null,
         metrics: {},
         tasks: [],
+        contracts: [],
         questions: [],
         events: [],
         feedback: [],
@@ -80,9 +82,22 @@ export class ProjectStore {
       );
     return new ProjectStore(project, value);
   }
-  async mutate(operation, input) {
+  async mutate(operation, input, authority = "agent") {
     const next = structuredClone(this.value);
-    applyOperation(next, operation, input);
+    if (operation === "contract") {
+      if (authority !== "local_administrator")
+        throw new Error("Only the local administrator can change a task contract");
+      const version = await prepareContract(next, input);
+      next.contracts ||= [];
+      let history = next.contracts.find((item) => item.task_id === input.task_id);
+      if (!history) {
+        history = { task_id: input.task_id, versions: [] };
+        next.contracts.push(history);
+      }
+      history.versions.push(version);
+    } else {
+      applyOperation(next, operation, input);
+    }
     next.revision++;
     next.updated_at = new Date().toISOString();
     const names = {
@@ -91,13 +106,16 @@ export class ProjectStore {
       task: "dashboard.task.updated",
       event: "dashboard.progress.updated",
       metrics: "dashboard.metrics.updated",
+      contract: "dashboard.contract.updated",
     };
     const summary =
       operation === "answer"
         ? input.answer
         : operation === "question"
           ? input.question
-          : input.title || "指標を更新";
+          : operation === "contract"
+            ? "タスク契約を更新"
+            : input.title || "指標を更新";
     next.changes ||= [];
     next.changes.push({
       eventId: `evt_${this.project.id}_${next.revision}`,
@@ -106,7 +124,7 @@ export class ProjectStore {
       data: {
         project_id: this.project.id,
         revision: next.revision,
-        entity_id: input.id || "",
+        entity_id: input.id || input.task_id || "",
         summary: String(summary).slice(0, 1000),
       },
       cursor: null,

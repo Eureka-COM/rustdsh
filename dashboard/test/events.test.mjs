@@ -221,14 +221,28 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   const discovery = await request("server/discover");
   assert.ok(discovery.supportedVersions.includes("2026-07-28"));
   assert.deepEqual(discovery.capabilities.events, {});
-  assert.equal((await request("events/list")).events.length, 5);
-  assert.equal((await request("tools/list")).tools.length, 6);
+  assert.ok((await request("events/list")).events.some((event) => event.name === "dashboard.contract.updated"));
+  assert.ok((await request("tools/list")).tools.some((tool) => tool.name === "dashboard_check_task_contract"));
   const result = await request("tools/call", {
     name: "dashboard_upsert_task",
     arguments: { id: "T1", title: "MCP 2 test", status: "todo" },
   });
   assert.equal(result.resultType, "complete");
   assert.equal(dashboard.store.value.tasks.length, 1);
+  const contractResponse = await fetch(dashboard.localUrl + "api/contracts/update", {
+    method: "POST",
+    headers: { authorization: "Bearer " + runtime.token, "content-type": "application/json" },
+    body: JSON.stringify({
+      task_id: "T1", expected_version: 0, purpose: "MCP 2 test",
+      repository: project.root, allowed_scope: "Read only", write_roots: [],
+      forbidden_actions: ["No writes"], completion_conditions: ["Test passes"],
+      change_reason: "Initial contract",
+    }),
+  });
+  assert.equal(contractResponse.status, 200);
+  const checkInput = { task_id: "T1", contract_version: 1, repository: project.root, cwd: project.root, write_paths: [] };
+  const checked = await request("tools/call", { name: "dashboard_check_task_contract", arguments: checkInput });
+  assert.equal(JSON.parse(checked.content[0].text).decision, "within_scope");
   const subscription = {
     name: "dashboard.answer.created",
     arguments: { project_id: project.id },
@@ -278,6 +292,8 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   runtime.mcp_token = JSON.parse(
     await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
   ).mcp_token;
+  const resumed = await request("tools/call", { name: "dashboard_check_task_contract", arguments: checkInput });
+  assert.equal(JSON.parse(resumed.content[0].text).contract_version, 1);
   await request("events/unsubscribe", subscription);
   await request("events/unsubscribe", subscription);
 });

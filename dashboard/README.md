@@ -4,7 +4,7 @@
 
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| `project` | Project metrics, tasks, questions, human answers, progress | Six project-scoped MCP tools                     |
+| `project` | Project metrics, tasks, questions, human answers, progress | Seven project-scoped MCP tools                   |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -96,6 +96,7 @@ configuration after a restart, because the bearer key rotates.
 | `dashboard_publish_event`  | Report progress or an artifact reference     |
 | `dashboard_get_feedback`   | Read durable answers after a sequence cursor |
 | `dashboard_get_state`      | Read this project's current state            |
+| `dashboard_check_task_contract` | Preflight declared repo/cwd/write paths against a versioned task contract |
 
 Example tool arguments:
 
@@ -134,6 +135,83 @@ tool errors / tool calls. Costs are reported API-equivalent values, not invoices
 Artifact references are displayed as text. Local file contents are never opened
 or served. Treat all user-authored questions, answers, progress, and paths as data.
 
+## Versioned task contracts (P0 foundation, Issue #12)
+
+Create the task first, then save its contract with the local administrator CLI:
+
+```sh
+rdsh-dashboard set-contract --project /path/to/repo --file contract.json
+```
+
+On Windows, use absolute native paths (JSON backslashes must be escaped).
+The dashboard must already be running. This command uses its local administrator
+credential internally; do not copy the credential into the contract or arguments.
+Use test directories and `--no-tailscale` for local validation.
+
+```json
+{
+  "task_id": "M3.6",
+  "expected_version": 0,
+  "purpose": "Validate the launcher locally",
+  "repository": "/path/to/repo",
+  "allowed_scope": "Edit source and local tests only",
+  "write_roots": ["/path/to/repo/src", "/path/to/repo/tests"],
+  "forbidden_actions": ["No remote push, publication, or credential changes"],
+  "completion_conditions": ["Affected tests pass and the change is reviewed"],
+  "change_reason": "Initial task scope"
+}
+```
+
+`expected_version` is zero for creation and the current version for an update.
+The server serializes updates and rejects a stale version. All versions, change
+reasons and timestamps remain in project state; task reports, questions, answers
+and conversation summaries never replace the contract. The task row displays the
+current version and its history. MCP clients read the same history with
+`dashboard_get_state`, including after restart. Existing schema-1 state remains
+readable; tasks without contracts are shown as unset and preflight blocks them.
+
+Only `POST /api/contracts/update` with the local administrator bearer credential
+can save a contract. Browser and MCP credentials cannot change it; there is no
+MCP contract mutation tool. This is the existing single-owner credential boundary,
+not proof of a particular human's identity. A process running as the same OS user
+may still read the private runtime file. Each change marks previous approvals as
+requiring revalidation; no answer is converted to an execution approval. The
+approval ledger and actual reuse/retry rules remain Issue #30 work.
+
+Before an operation, call `dashboard_check_task_contract` with:
+
+```json
+{
+  "task_id": "M3.6",
+  "contract_version": 1,
+  "repository": "/path/to/repo",
+  "cwd": "/path/to/repo",
+  "write_paths": ["src/main.rs"]
+}
+```
+
+The corresponding HTTP endpoint is `POST /api/contracts/check`. `within_scope`
+(HTTP 200) means only that these declared paths passed preflight. `block` or
+`unparsed` (HTTP 409) must stop the caller. The stdio and HTTP MCP routes return
+the same structured decision. Checks do not write state or read file contents.
+They require the active version and project repository, check cwd containment,
+and check both lexical and resolved write destinations. Empty `write_roots` means
+no writes. Roots must exist when saved; a new write leaf may be absent. Escaping,
+retargeted and dangling symlinks/junctions fail closed. Parent traversal and
+ambiguous Windows device/ADS/drive-relative paths are unsupported. Diagnostics
+return fixed reason codes without echoing supplied paths or command text.
+
+This is an opt-in preflight boundary, not an execution grant or OS sandbox.
+`allowed_scope`, `forbidden_actions` and `completion_conditions` are descriptive;
+they are saved and displayed but are not parsed as executable policy. Commands,
+read paths, network destinations and shell syntax are not evaluated; supplying
+unknown fields returns `unparsed`. The existing launcher and original DSH tool
+execution do not call this check automatically. Adapter integration, structured
+tool/command policy (Issue #29), approval matching (Issue #30), input provenance
+(Issue #32) and actual sandbox enforcement (Issue #33) are needed before expanding
+execution permissions. Filesystem or contract changes after preflight can
+invalidate a result; recheck at use, and rely on an execution sandbox for enforcement.
+
 ## OpenAI ChatGPT Dots and MCP Events
 
 The project HTTP `/mcp` endpoint implements MCP 2.0 (`2026-07-28`) discovery and
@@ -145,6 +223,7 @@ project bearer authentication used for tools. Available events:
 - `dashboard.task.updated`
 - `dashboard.progress.updated`
 - `dashboard.metrics.updated`
+- `dashboard.contract.updated`
 
 Each requires the project's `project_id` filter. Subscribe to
 `dashboard.answer.created` when a Dot should react to human replies, then retrieve

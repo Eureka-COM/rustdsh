@@ -122,10 +122,31 @@ function render(state) {
       const tr = node("tr");
       const status = node("td");
       status.append(node("span", task.status, "status " + task.status));
+      const title = node("td", task.title);
+      const versions = state.contracts?.find((item) => item.task_id === task.id)?.versions || [];
+      const current = versions.at(-1);
+      const details = node("details");
+      details.append(node("summary", current ? `タスク契約 v${current.version}` : "タスク契約 未設定"));
+      if (current) {
+        for (const contract of versions.slice().reverse()) {
+          details.append(node("strong", `v${contract.version} ・ ${contract.changed_at}`));
+          for (const [label, value] of [
+            ["目的", contract.purpose],
+            ["対象repo", contract.repository],
+            ["許可範囲", contract.allowed_scope],
+            ["書込先", contract.write_roots.join("\n") || "書込不可"],
+            ["禁止事項", contract.forbidden_actions.join("\n") || "記載なし"],
+            ["終了条件", contract.completion_conditions.join("\n")],
+            ["変更理由", contract.change_reason],
+          ]) details.append(node("p", `${label}: ${value}`));
+        }
+        details.append(node("p", "契約変更後は承認の再照合が必要です。質問への回答は契約を変更しません。"));
+      }
+      title.append(details);
       tr.append(
         node("td", task.id, "id"),
         status,
-        node("td", task.title),
+        title,
         node("td", task.blocker),
       );
       return tr;

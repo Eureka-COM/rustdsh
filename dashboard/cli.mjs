@@ -12,6 +12,7 @@ rdsh-dashboard harness [--port 38081] [--harness-port 3081] [--no-tailscale] [--
 rdsh-dashboard open --project <directory> | --harness
 rdsh-dashboard stop --project <directory> | --harness
 rdsh-dashboard revoke-events --project <directory>
+rdsh-dashboard set-contract --project <directory> --file <contract.json>
 rdsh-dashboard tunnel --project <directory> --tunnel-id <tunnel_id>
 rdsh-dashboard mcp --project <directory>
 
@@ -23,6 +24,7 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     project: { type: "string" },
+    file: { type: "string" },
     port: { type: "string" },
     "harness-port": { type: "string" },
     "no-tailscale": { type: "boolean" },
@@ -53,6 +55,31 @@ try {
   const command = positionals[0];
   if (values.help || !command) {
     console.log(help);
+  } else if (command === "set-contract") {
+    if (values.harness || !values.file)
+      throw new Error("Provide --file <contract.json> in project mode");
+    const project = await identity(values.project || process.cwd());
+    const runtime = JSON.parse(await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"));
+    if (runtime.kind !== "project" || runtime.project_id !== project.id)
+      throw new Error("Dashboard runtime belongs to a different project");
+    let input;
+    try {
+      const contents = await fs.readFile(values.file, "utf8");
+      if (Buffer.byteLength(contents) > 131072) throw new Error("Too large");
+      input = JSON.parse(contents);
+    } catch {
+      throw new Error("Contract file must be readable JSON within 128 KiB");
+    }
+    const response = await fetch(runtime.local_url + "api/contracts/update", {
+      method: "POST",
+      headers: { authorization: `Bearer ${runtime.token}`, "content-type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(15000),
+    });
+    const state = await response.json();
+    if (!response.ok) throw new Error(state.error || `HTTP ${response.status}`);
+    const version = state.contracts.find((item) => item.task_id === input.task_id).versions.at(-1).version;
+    console.log(`[rdsh-dashboard] Task contract saved: v${version}; prior approvals require revalidation`);
   } else if (["open", "stop", "revoke-events"].includes(command)) {
     const project = values.harness
       ? null

@@ -12,6 +12,7 @@ import { enableShare } from "./tailscale.mjs";
 import { startHarness, proxyHarness, upgradeHarness } from "./harness.mjs";
 import { EventsHub } from "./webhooks.mjs";
 import { modernMcpHandler } from "./mcp2.mjs";
+import { checkContract } from "./contracts.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const equal = (a, b) =>
@@ -90,7 +91,7 @@ export async function startDashboard(options) {
   const sockets = new Set();
   const modern = store
     ? modernMcpHandler(
-        { getState: async () => publicState(store.value), mutate },
+        { getState: async () => publicState(store.value), mutate, checkContract: preflight },
         eventsHub,
       )
     : null;
@@ -194,17 +195,23 @@ export async function startDashboard(options) {
       refreshPromise = null;
     }
   }
-  async function mutate(operation, input) {
+  async function mutate(operation, input, authority = "agent") {
     if (!store)
       throw new Error("Project operations are unavailable in Harness mode");
     const task = updateQueue.then(async () => {
-      const state = await store.mutate(operation, input);
+      const state = await store.mutate(operation, input, authority);
       for (const response of live)
         response.write(`event: changed\ndata: ${state.revision}\n\n`);
       for (const { mcp } of sessions.values()) void mcp.notify();
       void eventsHub.flush().catch(() => {});
       return publicState(state);
     });
+    updateQueue = task.catch(() => {});
+    return task;
+  }
+  async function preflight(input) {
+    // Share the writer queue so the check observes preceding contract changes.
+    const task = updateQueue.then(() => checkContract(store.value, input));
     updateQueue = task.catch(() => {});
     return task;
   }
@@ -233,7 +240,7 @@ export async function startDashboard(options) {
         ? url.pathname.slice(prefix.length)
         : null;
       const adminAuthorized = equal(req.headers.authorization, `Bearer ${token}`);
-      const agentRoute = route === "/mcp" || route === "/api/state" ||
+      const agentRoute = route === "/mcp" || route === "/api/state" || route === "/api/contracts/check" ||
         (req.method === "POST" && ["metrics", "task", "question", "event"].some((operation) => route === `/api/update/${operation}`));
       const mcpAuthorized = kind === "project" && agentRoute && equal(req.headers.authorization, `Bearer ${mcpToken}`);
       const humanAuthorized = browserAuthorized(req, url, route);
@@ -304,8 +311,19 @@ export async function startDashboard(options) {
       if (kind === "project") {
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, publicState(store.value));
+        if (req.method === "POST" && route === "/api/contracts/update") {
+          if (!adminAuthorized)
+            return json(res, 403, { error: "Administrator bearer token required" });
+          return json(res, 200, await mutate("contract", await readBody(req), "local_administrator"));
+        }
+        if (req.method === "POST" && route === "/api/contracts/check") {
+          const result = await preflight(await readBody(req));
+          return json(res, result.decision === "within_scope" ? 200 : 409, result);
+        }
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
+          if (operation === "contract")
+            return json(res, 403, { error: "Use the administrator contract endpoint" });
           if (operation === "answer" ? !humanAuthorized : !(mcpAuthorized || adminAuthorized))
             return json(res, 403, { error: "This credential cannot perform that operation" });
           return json(
@@ -345,6 +363,7 @@ export async function startDashboard(options) {
             const mcp = createMcpServer({
               getState: async () => publicState(store.value),
               mutate,
+              checkContract: preflight,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,
