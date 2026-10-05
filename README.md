@@ -244,6 +244,10 @@ rdsh serve
 Dependency-free (std-only HTTP server plus one embedded HTML file, no CDN,
 works offline).
 
+Which dashboard? `rdsh serve` is the quick local status page for this
+machine. For project metrics, human Q&A, and phone access, use the optional
+[Node.js dashboard](dashboard/README.md) instead.
+
 ### Private project dashboards and phone access
 
 The optional [Node.js dashboard](dashboard/README.md) adds project metrics,
