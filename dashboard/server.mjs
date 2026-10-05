@@ -333,10 +333,8 @@ export async function startDashboard(options) {
         return res.end(svg);
       }
       if (kind === "project") {
-        if (req.method === "POST" && ["/api/policy/check", "/api/approvals/request", "/api/approvals/check",
-          "/api/approvals/claim", "/api/workers/check"].includes(route) &&
-          !(adminAuthorized || mcpAuthorized || humanAuthorized))
-          return json(res, 403, { error: "Project credential required" });
+        // The shared 401 gate above authenticates all project checks. Claiming
+        // a retry/cost reservation additionally requires the execution credential.
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, publicState(store.value));
         if (req.method === "POST" && route === "/api/contracts/update") {
@@ -357,6 +355,8 @@ export async function startDashboard(options) {
         if (req.method === "POST" && route === "/api/approvals/request")
           return json(res, 200, await requestApproval(await readBody(req)));
         if (req.method === "POST" && ["/api/approvals/check", "/api/approvals/claim"].includes(route)) {
+          if (route.endsWith("claim") && !mcpAuthorized)
+            return json(res, 403, { error: "Execution bearer token required" });
           const result = await (route.endsWith("claim") ? approvalClaim : approvalCheck)(await readBody(req));
           return json(res, result.decision === "approval_valid" ? 200 : 409, result);
         }

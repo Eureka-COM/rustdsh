@@ -95,8 +95,20 @@ export async function evaluateOperation(state, input) {
       }
       operation.path = resolved;
     } else if (operation.tool === "process.exec") {
-      const executable = await fs.realpath(operation.executable);
-      if (shellFile(executable) || !(await fs.stat(executable)).isFile())
+      let executable, isFile;
+      const savedExecutable = policy.executables.some((rule) => rule.file === operation.executable);
+      try {
+        executable = await fs.realpath(operation.executable);
+        isFile = (await fs.stat(executable)).isFile();
+      }
+      catch {
+        if (savedExecutable)
+          return result("block", "executable_changed_or_unavailable");
+        throw new Error("Unresolved executable");
+      }
+      if (savedExecutable && (!isFile || executable !== operation.executable))
+        return result("block", "executable_changed_or_unavailable");
+      if (shellFile(executable) || !isFile)
         return result("unparsed", "shell_or_executable_unsupported");
       if (!policy.executables.some((rule) => rule.file === executable &&
           rule.argument_count === operation.argument_count && rule.arguments_digest === operation.arguments_digest))

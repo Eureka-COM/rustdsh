@@ -123,6 +123,9 @@ test("HTTP credentials cannot impersonate a human and concurrent claims cannot r
   assert.equal((await post("approvals/decide", grant, human)).status, 200);
   for (const headers of [admin, agent, human])
     assert.equal((await post("approvals/check", use, headers)).status, 200);
+  for (const headers of [admin, human])
+    assert.equal((await post("approvals/claim", use, headers)).status, 403);
+  assert.equal(currentRequest(dashboard.store.value, "R1").uses.length, 0);
   const claims = await Promise.all([post("approvals/claim", use, agent), post("approvals/claim", use, agent)]);
   assert.deepEqual(claims.map((response) => response.status).sort(), [200, 409]);
   assert.equal(currentRequest(dashboard.store.value, "R1").uses.length, 1);

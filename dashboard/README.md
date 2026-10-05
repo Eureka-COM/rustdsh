@@ -277,6 +277,10 @@ semantics, dynamic subprocess effects and OS enforcement remain unconnected.
 ### Approval ledger (Issue #30 foundation)
 
 General question answers remain feedback. They never grant operation approval.
+Project credentials may inspect approval checks; only the execution/MCP bearer
+may claim retry/cost reservations over HTTP. Administrator and browser credentials
+cannot consume execution attempts. The shared HTTP authentication gate returns
+401 for unauthenticated checks; human grant/reject/revoke remains a separate gate.
 Create a request with `dashboard_request_approval` or `POST /api/approvals/request`:
 
 ```json
@@ -353,6 +357,69 @@ detect hardlink aliases or mounted filesystems, and can race with filesystem
 changes. The original DSH launcher remains independent and does not call this
 gate. Real OS refusal tests and launcher interception are still required; the
 isolated source tests establish the unsupported-environment hold only.
+
+### DSH operation boundary (Issues #29/#30/#32/#33, partial)
+
+`dsh-guard.mjs` exposes a programmatic Cordis plugin (`apply`, `inject: ["tools"]`)
+and `attachDshGuard(ctx, config)`. Attach it to a dedicated DSH context with the
+real `ToolRuntime` already registered, before starting workers or invoking tools:
+
+```js
+const guard = attachDshGuard(ctx, {
+  task: { task_id, contract_version, repository, run_id, worker_role },
+  readState: async () => currentProjectState,
+  recordCheck: async (report) => durableHostAudit(report),
+});
+const startup = await guard.ready();
+// This release always holds startup: do not start the protected worker.
+```
+
+The host owns state freshness, serialized state access, durable audit and the
+entire protected context's lifetime. Missing callbacks or `tools.guard` fail
+installation. Audit failures deny execution. Do not unload this plugin or reuse
+its context as an unprotected worker; `guard.stop()` keeps denial installed.
+This API does not edit the installed DSH configuration or the original launcher.
+
+The plugin registers DSH's synchronous, monotonic `tools.guard` before its
+asynchronous `tools/pre-execute` checks. It maps the exact `read {file_path}` and
+`write {file_path,content}` subset from `dsh-tool-fs` 0.2.0-rc.2 to task policy,
+then checks the bound approval and worker enforcement requirements. Extra fields,
+escalation flags, offsets, editors, shell tools, PTC transports and unknown tools
+are unsupported. A later policy returning `allow`, skipping asynchronous checks,
+or DSH's own one-time approval cannot force this guard to allow execution.
+
+There is deliberately no execution/claim path: even a valid human grant returns
+`enforcement_adapter_unavailable`, with no effective permissions or reservation.
+No complete OS adapter is registered. This connects the hold to actual DSH tool
+dispatch; it does not prove filesystem/network/child-process containment. Mapping
+uses the contract repository as the declared cwd; actual backend resolution must
+also be verified before a future adapter can enable execution. The legacy
+`rdsh`/`dsh` passthrough, initial context loading, direct backend access, plugin
+unloading and LLM requests remain outside this protected tool boundary.
+
+Host code can bind an approval reference and attributed external data to one
+call ID with `guard.bindCall(callId, {approval, sources})`. The approval reference
+has only `id`, `request_version`, `attempt`, `cost_usd`; it cannot mint a grant.
+It is consumed as a binding once per check, without consuming the ledger's
+retry/cost allowance. External `repository`, `tool_result`, `web` and `agent`
+envelopes created by `provenance.mjs` always have `untrusted_data` authority.
+Summary/forward transformations preserve original references, content digests
+and lineage. These are self-reported attribution, not identity authentication or
+cryptographic proof. `renderExternalQuote` renders content/references using
+`textContent`; audit reports retain metadata/digests, not source or operation
+bodies. Reports list uninspected session replay, compaction, context injection
+and direct-backend paths. Automatic source capture through those DSH subsystems
+and integration into the dashboard source UI remain unfinished.
+
+The real-runtime fixture uses existing libraries without DSH boot/auth/LLM:
+
+```sh
+RDSH_DSH_MODULE_ROOT=/path/to/existing/node_modules/@deepseek-ai \
+  node --test test/dsh-runtime.integration.mjs
+```
+
+It is separate from `npm test` and fails if the existing libraries are missing.
+Tested with DSH ToolRuntime 0.2.0-rc.2; no runtime dependency is added.
 
 ## OpenAI ChatGPT Dots and MCP Events
 

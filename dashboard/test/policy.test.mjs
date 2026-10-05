@@ -84,6 +84,17 @@ test("deleted saved roots and executables are blocked as policy changes instead 
   await fs.mkdir(src);
   await fs.rm(executable);
   assert.equal((await checkWorkerStart(store.value, worker)).reason, "executable_changed_or_unavailable");
+  const exec = await evaluateOperation(store.value, {
+    ...operation("process.exec", { executable, args: [] }), contract_version: 2,
+  });
+  assert.equal(exec.decision, "block");
+  assert.equal(exec.reason, "executable_changed_or_unavailable");
+  await fs.mkdir(executable);
+  const replaced = await evaluateOperation(store.value, {
+    ...operation("process.exec", { executable, args: [] }), contract_version: 2,
+  });
+  assert.equal(replaced.decision, "block");
+  assert.equal(replaced.reason, "executable_changed_or_unavailable");
   await store.mutate("contract", { ...contract, expected_version: 2 }, "local_administrator");
   await fs.rmdir(src);
   const write = await checkContract(store.value, { task_id: "T1", contract_version: 3, repository: project.root,
