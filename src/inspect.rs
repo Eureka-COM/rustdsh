@@ -246,9 +246,17 @@ fn parallelism() -> usize {
         .clamp(1, 8)
 }
 
+/// Subprocess batch width: external `zstd` calls pay spawn latency each,
+/// so waves must overlap it. Memory stays O(1) per process (64 KiB pump),
+/// therefore oversubscribing CPU here is safe, unlike thread work.
+/// Keeps a hard bound (no unbounded spawn storms) while hiding latency.
+fn subprocess_width() -> usize {
+    (parallelism() * 4).clamp(8, 32)
+}
+
 fn batch_decompressed(root: &str, shown: &[&Session], zstd_cli: bool) -> Vec<Option<u64>> {
     let mut out: Vec<Option<u64>> = vec![None; shown.len()];
-    let width = parallelism().max(1);
+    let width = subprocess_width();
     for (base, chunk) in shown.chunks(width).enumerate() {
         std::thread::scope(|s| {
             let mut handles = vec![];
