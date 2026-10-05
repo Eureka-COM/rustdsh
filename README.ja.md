@@ -220,6 +220,12 @@ rdsh serve
 
 使い分け：`rdsh serve` は手元の簡易状態ページです。プロジェクトの指標・質問と回答・スマホ接続には、下の [Node.jsダッシュボード](dashboard/README.md) を使います。
 
+### どちらを使うか（`rdsh serve` と `dashboard/`）
+
+- 手元の状態確認（バージョン・doctor・tokens・sessions）だけなら `rdsh serve` を使います。`rdsh` バイナリだけで動きます。
+- プロジェクトの指標・タスク・質問と回答・スマホ接続には `dashboard/` を使います。Node.js 22+ が必要です。詳しくは[Node.jsダッシュボードの案内](dashboard/README.md)を見てください。
+- dsh web GUIと同ポート（3080）で競合したら、dsh webを3080のままにして `rdsh serve --port 38080` で分けます。
+
 ### プロジェクト専用ダッシュボードとスマホ接続
 
 追加の [Node.jsダッシュボード](dashboard/README.md) では、費用・タスク・質問と回答を
@@ -278,6 +284,7 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 - 設計資料：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)・
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md)・[docs/ROADMAP.md](docs/ROADMAP.md)・
   [docs/RELEASING.md](docs/RELEASING.md)・[CHANGELOG.md](CHANGELOG.md)。
+- 改善案の索引：[Issue #74](https://github.com/sahenjp/rustdsh/issues/74)（全72案と機能Issueの対応表、優先度P0-P3付き）。
 
 ## よくある質問
 

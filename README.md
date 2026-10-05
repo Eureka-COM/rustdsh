@@ -261,6 +261,16 @@ Which dashboard? `rdsh serve` is the quick local status page for this
 machine. For project metrics, human Q&A, and phone access, use the optional
 [Node.js dashboard](dashboard/README.md) instead.
 
+### Which dashboard should I use? (`rdsh serve` vs `dashboard/`)
+
+- Use `rdsh serve` for a quick local check of this machine
+  (version, doctor, tokens, sessions). No setup beyond the `rdsh` binary.
+- Use `dashboard/` for project work: metrics, tasks, human Q&A,
+  and phone access via Tailscale QR. It needs Node.js 22+.
+  See the [Node.js dashboard guide](dashboard/README.md).
+- If port 3080 is taken by the dsh web GUI, keep 3080 for dsh web
+  and run `rdsh serve --port 38080`.
+
 ### Private project dashboards and phone access
 
 The optional [Node.js dashboard](dashboard/README.md) adds project metrics,
@@ -328,6 +338,8 @@ dumps, missing `--profile`) are reproduced in Rust.
 - Design docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md) · [docs/ROADMAP.md](docs/ROADMAP.md) ·
   [docs/RELEASING.md](docs/RELEASING.md) · [CHANGELOG.md](CHANGELOG.md).
+- Improvement index: [issue #74](https://github.com/sahenjp/rustdsh/issues/74)
+  maps all 72 proposals to feature issues with priority (P0-P3).
 - Be kind: [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Contributing
