@@ -20,7 +20,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let mut random = [0u8; 16];
-        getrandom::getrandom(&mut random).unwrap();
+        getrandom::fill(&mut random).unwrap();
         let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
         let root = std::env::temp_dir().join(format!("rdsh-sharing-fixture-{suffix}"));
         std::fs::create_dir(&root).unwrap();
