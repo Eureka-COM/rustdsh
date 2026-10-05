@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # rdsh installer: install as `rdsh`, optionally shadow `dsh` (with backup + restore).
+# Release checklist (Issue #7, docs only):
+# 1) bump version in Cargo.toml, 2) cargo build/test/regress green,
+# 3) commit + push, 4) cargo publish (needs crates.io token + verified email),
+# 5) refresh live install via ./install.sh --as-dsh and verify `dsh --version`
+# delegation, 6) confirm sync-dsh.sh picks up the new version on its next run.
 set -euo pipefail
 # Release-download scratch dir (set by fetch_release); cleaned at exit.
 FETCH_TMPD=""
@@ -62,10 +67,11 @@ ver_lt() {
   awk -v a="$1" -v b="$2" 'BEGIN { n=split(a,aa,"."); m=split(b,bb,"."); k=(n>m?n:m); for(i=1;i<=k;i++){x=(aa[i]==""?0:aa[i]); y=(bb[i]==""?0:bb[i]); if(x<y) exit 0; if(x>y) exit 1;} exit 1; }'
 }
 want_musl() {
-  # Explicit --musl / RDSH_MUSL=1 wins; otherwise auto-select musl on old glibc.
+  # Explicit --musl / RDSH_MUSL=1 wins; otherwise auto-select musl when the
+  # glibc passed in $1 (computed once by fetch_release) is older than 2.34.
   if [ "${USE_MUSL:-0}" = 1 ]; then return 0; fi
   if [ "$OS/$ARCH" = "Linux/x86_64" ]; then
-    gv="$(glibc_version)"
+    gv="${1:-}"
     if [ -n "$gv" ] && ver_lt "$gv" "2.34"; then return 0; fi
   fi
   return 1
@@ -104,9 +110,9 @@ fetch_release() {
   base="${RDSH_RELEASE_BASE:-https://github.com/sahenjp/rustdsh/releases}"
   case "$OS/$ARCH" in
     Linux/x86_64)
-      if want_musl; then asset="rdsh-linux-x64-musl.tar.gz"; else asset="rdsh-linux-x64.tar.gz"; fi
+      gv="$(glibc_version)"
+      if want_musl "$gv"; then asset="rdsh-linux-x64-musl.tar.gz"; else asset="rdsh-linux-x64.tar.gz"; fi
       if [ "${USE_MUSL:-0}" != 1 ]; then
-        gv="$(glibc_version)"
         if [ -n "$gv" ] && ver_lt "$gv" "2.34"; then echo "glibc $gv < 2.34: selecting static musl build" >&2; fi
       else
         echo "selecting static musl build (--musl / RDSH_MUSL=1)" >&2
@@ -173,3 +179,6 @@ fi
 echo "--- rdsh doctor ---"
 "$PREFIX/rdsh" doctor 2>&1 | head -n 12 || true
 echo "next: run '$PREFIX/rdsh setup' to connect a model (GPT subscription via OAuth needs no API key)"
+if [ -f "./plugins/install.sh" ]; then
+  echo "next: PROFILE=web ./plugins/install.sh adds recommended plugins, including the rdsh settings UI"
+fi

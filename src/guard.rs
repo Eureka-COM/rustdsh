@@ -1,6 +1,16 @@
 // rdsh guard: tiny hook command for hooks.json (Claude Code / Codex bridges).
 // Scans stdin (hook JSON or raw text) for deny patterns and blocks on match.
 // Exit 2 = block with reason on stderr; anything else = allow. ~1ms startup.
+//
+// Policy notes (Bucket C, issues #29/#30/#32/#33) — behavior unchanged:
+// - #29 operation structure: deny patterns are structural (`a*b`, anchors),
+//   not semantic allow-lists; unanchored text matches as substring.
+// - #33 external input: JSON hook payloads are flattened to string values only
+//   (`collect_text`); keys/numbers/bools never match, raw text stays borrowed.
+// - #32 credential hygiene: prefer narrow deny globs (e.g. `*.credentials.yaml*`)
+//   shared minimally per call, not broad secrets dumped into the prompt.
+// - #30 approval ledger: JSON mode prints `{"decision": ...}` for ledgering;
+//   text mode exits 2 with the reason on stderr.
 
 pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     if pattern == "*" || pattern.is_empty() {
@@ -143,5 +153,43 @@ mod tests {
     fn collect_json_strings() {
         let t = collect_text("plain text here");
         assert_eq!(t, "plain text here");
+    }
+
+    // #29 operation structure: multi-star order + anchor edges.
+    #[test]
+    fn wild_multi_star_order() {
+        assert!(wildcard_match("a*b*c", "axbxc"));
+        assert!(!wildcard_match("a*b*c", "axcxb"));
+        assert!(wildcard_match("**", "anything"));
+        assert!(wildcard_match("", "anything"));
+        assert!(!wildcard_match("*end", "the ending"));
+    }
+
+    // #32 credential hygiene: narrow deny globs catch leaks, miss clean text.
+    #[test]
+    fn deny_credential_globs() {
+        assert!(wildcard_match(
+            "*.credentials.yaml*",
+            "read $DSH_HOME/.credentials.yaml now"
+        ));
+        assert!(wildcard_match("*AKIA*", "key AKIAIOSFODNN7EXAMPLE here"));
+        assert!(!wildcard_match(
+            "*.credentials.yaml*",
+            "read the setup guide now"
+        ));
+    }
+
+    // #33 external input: JSON values flatten, keys/scalars never match.
+    #[test]
+    fn collect_nested_json_values_only() {
+        let raw = r#"{"tool_input": {"cmd": ["run", "rm -rf / x"]}, "n": 42}"#;
+        let t = collect_text(raw);
+        assert!(t.contains("rm -rf / x"));
+        assert!(!t.contains("tool_input"));
+        assert!(!t.contains("42"));
+        assert!(wildcard_match("rm -rf /*", &t) || wildcard_match("*rm -rf*", &t));
+        for scalar in ["123", "true", "null"] {
+            assert_eq!(collect_text(scalar), scalar);
+        }
     }
 }

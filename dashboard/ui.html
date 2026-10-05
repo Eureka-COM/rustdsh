@@ -270,6 +270,62 @@
         background: #edf1f7;
         border-radius: 8px;
       }
+      /* #42/#61: 配置は変えず、待避線・種別表示・パレット分だけ足す。 */
+      .skip {
+        position: absolute;
+        left: 12px;
+        top: -60px;
+        z-index: 10;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 9px 15px;
+      }
+      .skip:focus {
+        top: 12px;
+      }
+      .kind {
+        display: inline-block;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 8px;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+      .kind-approval {
+        color: var(--red);
+      }
+      #palette {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px 20px;
+        width: min(560px, calc(100vw - 40px));
+      }
+      #palette::backdrop {
+        background: rgb(0 0 0 / 0.25);
+      }
+      #palette h2 {
+        margin: 0 0 4px;
+      }
+      #palette-search {
+        width: 100%;
+        margin-top: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        font: inherit;
+      }
+      #palette-list {
+        list-style: none;
+        margin: 12px 0 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
+      #palette-list button {
+        width: 100%;
+        text-align: left;
+      }
       @media (max-width: 1000px) {
         .cards {
           grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -318,6 +374,8 @@
     </style>
   </head>
   <body>
+    <!-- #61: キーボード利用者が内容へ直接飛べる待避線。 -->
+    <a class="skip" href="#project-content">内容へ移動</a>
     <main>
       <header>
         <div>
@@ -325,9 +383,19 @@
           <h1 id="title">読み込み中…</h1>
           <div class="sub" id="location"></div>
         </div>
-        <button id="share-toggle" aria-expanded="false" aria-controls="share">
-          スマホで開く
-        </button>
+        <div>
+          <!-- #61: 主要操作をキーボードで呼ぶ入口。Ctrl/⌘+K でも開きます。 -->
+          <button
+            id="palette-toggle"
+            aria-haspopup="dialog"
+            aria-controls="palette"
+          >
+            コマンド
+          </button>
+          <button id="share-toggle" aria-expanded="false" aria-controls="share">
+            スマホで開く
+          </button>
+        </div>
       </header>
       <div id="connection" class="sub" role="status" aria-live="polite">
         接続中…
@@ -350,7 +418,9 @@
             >利用設定を開く</a
           >
           <p class="sub">
-            同じTailscaleネットワークに接続した端末から開けます。このPCでダッシュボードを起動しておいてください。
+            同じTailscaleネットワークに接続した端末から開けます。このPCでダッシュボードを起動しておいてください。タスク・質問の各行には
+            #task-&lt;id&gt;・#question-&lt;id&gt;
+            の目印があり、端末を替えても同じ対象へ戻れます。対象の表示と端末の認証は別の役割で、未認証の端末は認証を終えるまで内容・操作へ進めません。
           </p>
           <div id="mcp-info" class="sub"></div>
         </div>
@@ -362,31 +432,43 @@
         </div>
         <a id="harness-open" class="button">Harnessを開く</a>
       </section>
-      <div id="project-content">
+      <div id="project-content" tabindex="-1">
+        <!-- #42: 数値カードを開かなくても状態・判断要否だけ掴める一行要約。 -->
+        <p class="sub" id="overview" role="status" aria-live="polite"></p>
         <div class="cards" id="cards"></div>
-        <h2>タスク <span class="sub" id="task-milestones"></span></h2>
+        <h2 id="tasks-heading" tabindex="-1">
+          タスク <span class="sub" id="task-milestones"></span>
+        </h2>
         <div class="table-box">
-          <table>
+          <!-- #57: 各行に task-<id> の目印を付け、端末を替えても同じ行へ戻れるようにします。 -->
+          <table aria-labelledby="tasks-heading">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>状態</th>
-                <th>題</th>
-                <th>blocker</th>
+                <th scope="col">ID</th>
+                <th scope="col">状態</th>
+                <th scope="col">題名</th>
+                <th scope="col">ブロック要因</th>
               </tr>
             </thead>
             <tbody id="tasks"></tbody>
           </table>
         </div>
-        <h2>未回答の質問</h2>
+        <!-- #40: 回答は返答のみで実行権限を生みません。承認依頼と相談を同じ表で区別します。 -->
+        <h2 id="pending-heading" tabindex="-1">未回答の質問</h2>
+        <p class="sub" id="pending-note">
+          回答はこの質問への返答のみです。回答しただけで実行権限は生まれません。対象・条件が変わった場合は回答前に内容を再確認してください。
+        </p>
         <div class="table-box">
-          <table>
+          <table
+            aria-labelledby="pending-heading"
+            aria-describedby="pending-note"
+          >
             <thead>
               <tr>
-                <th>ID</th>
-                <th>緊急度</th>
-                <th>問い・回答</th>
-                <th>既定の行動</th>
+                <th scope="col">ID</th>
+                <th scope="col">緊急度</th>
+                <th scope="col">問い・回答</th>
+                <th scope="col">既定の行動（参考表示）</th>
               </tr>
             </thead>
             <tbody id="questions"></tbody>
@@ -399,6 +481,22 @@
           <div class="feed" id="answers"></div>
         </details>
       </div>
+      <!-- #61: 主要操作をキーボードで呼ぶ小さな一覧。既存ボタンの操作を再利用し、権限・状態チェックは各操作側で行います。 -->
+      <dialog id="palette" aria-labelledby="palette-title">
+        <h2 id="palette-title">コマンド</h2>
+        <p class="sub">
+          日本語・英語で絞り込めます。Escで閉じて元の位置に戻ります。
+        </p>
+        <input
+          id="palette-search"
+          type="search"
+          aria-label="コマンドを絞り込む"
+          placeholder="例: 共有 / share"
+          autocomplete="off"
+        />
+        <p class="sub" id="palette-count" role="status"></p>
+        <ul id="palette-list"></ul>
+      </dialog>
       <footer id="updated">
         未取得の指標はMCPから報告されたときに表示されます。費用は報告元のAPI換算値で、請求額とは別です。
       </footer>

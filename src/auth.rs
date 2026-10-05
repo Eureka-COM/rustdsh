@@ -15,6 +15,18 @@
 //   3. keep the file at 0600, otherwise dsh refuses to read it
 //   4. every other byte of the document is preserved (line surgery, no re-emit)
 
+// Issue #87 epic memo (87-1 design decision, comment only, no routing logic yet):
+//   - Placement UNDECIDED: rdsh is a launcher/sim (passthrough delegation in
+//     src/main.rs), not an LLM gateway. Candidates: (a) advise profile choice
+//     at startup only, (b) rewrite agent-default-model in cordis.patch.yml,
+//     (c) relay requests. No implementation until 87-1 picks one.
+//   - Price source: official pages only (URL/format/refresh TBD for 2 firms);
+//     start with a manual table (87-2), auto-fetch comes later (87-3).
+//   - Formula (units fixed in 87-1): effective price = API price x model
+//     multiplier x (monthly fee / Credits); two worked examples TBD in 87-1.
+//   - Related: provider_needs_in(&grants, &doc) detection (ok/importable/missing) excludes
+//     unusable routes in 87-2; ZDR mode is split out to 87-5 (requirements first).
+
 use crate::auth_sharing::{AuthArgs, SharingLock, SharingPolicy};
 use std::collections::HashMap;
 
@@ -342,15 +354,14 @@ fn load_doc(path: &str) -> CredsDoc {
         Ok(t) => t,
         Err(_) => return doc,
     };
-    doc.text = text;
-    let lines: Vec<String> = doc.text.lines().map(|l| l.to_string()).collect();
+    // Parse borrowed lines instead of allocating a String per line.
     let mut section = "";
     let mut cur_key = String::new();
     let mut cur_kind = String::new();
     let mut cur_access: Option<String> = None;
     let mut cur_expires: Option<i64> = None;
     let mut in_payload = false;
-    for line in &lines {
+    for line in text.lines() {
         let ind = indent_of(line);
         let t: &str = line.trim();
         if t.is_empty() || t.starts_with('#') {
@@ -422,6 +433,7 @@ fn load_doc(path: &str) -> CredsDoc {
         &cur_access,
         cur_expires,
     );
+    doc.text = text;
     if doc.text.trim().is_empty() {
         doc.version_ok = true;
     }
@@ -634,14 +646,17 @@ fn fresher_than(source: &OauthGrant, stored: &StoredGrant, creds_mtime: u64) -> 
     }
 }
 
-fn plan() -> (
-    Vec<OauthGrant>,
-    Vec<ApiKey>,
-    Vec<String>,
-    CredsDoc,
-    Vec<Decision>,
-    String,
-) {
+/// A command-local snapshot; external login stores are scanned once.
+struct Scan {
+    grants: Vec<OauthGrant>,
+    keys: Vec<ApiKey>,
+    notes: Vec<String>,
+    doc: CredsDoc,
+    decisions: Vec<Decision>,
+    path: String,
+}
+
+fn scan() -> Scan {
     let mut grants: Vec<OauthGrant> = Vec::new();
     let mut keys: Vec<ApiKey> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
@@ -664,20 +679,27 @@ fn plan() -> (
     let creds_mtime = mtime_ms(&path);
 
     let decisions = decisions_for(&grants, &doc, creds_mtime);
-    (grants, keys, notes, doc, decisions, path)
+    Scan {
+        grants,
+        keys,
+        notes,
+        doc,
+        decisions,
+        path,
+    }
 }
 
 fn decisions_for(grants: &[OauthGrant], doc: &CredsDoc, creds_mtime: u64) -> Vec<Decision> {
     let mut best: HashMap<String, OauthGrant> = HashMap::new();
-    for g in grants.iter().cloned() {
+    for g in grants {
         match best.get(&g.provider) {
             Some(cur) => {
                 if g.expires.unwrap_or(0) > cur.expires.unwrap_or(0) {
-                    best.insert(g.provider.clone(), g);
+                    best.insert(g.provider.clone(), g.clone());
                 }
             }
             None => {
-                best.insert(g.provider.clone(), g);
+                best.insert(g.provider.clone(), g.clone());
             }
         }
     }
@@ -685,7 +707,7 @@ fn decisions_for(grants: &[OauthGrant], doc: &CredsDoc, creds_mtime: u64) -> Vec
     providers.sort();
     let mut decisions = Vec::new();
     for p in providers {
-        let g = best[&p].clone();
+        let g = best.remove(&p).unwrap();
         let key = format!("{RECORD_SCOPE}/{p}");
         match doc.grants.get(&key) {
             Some(stored) if stored.kind != "grant" => decisions.push(Decision {
@@ -741,6 +763,14 @@ fn autosync_enabled() -> bool {
     std::env::var("RDSH_AUTH_AUTOSYNC").as_deref() != Ok("0")
 }
 
+/// Upstream's combined pre-boot entry point, retaining explicit sharing.
+pub fn pre_boot(banner: bool) {
+    auto_sync();
+    if banner {
+        first_boot_banner();
+    }
+}
+
 /// Best-effort mirror before delegating to dsh (boot/dump/plugin/raw).
 /// Never imports without a valid selection. A broken store does not block launch.
 pub fn auto_sync() {
@@ -768,7 +798,14 @@ pub fn auto_sync() {
 /// actually writes (used by auto_sync before boot).
 // Caller holds SharingLock for the full policy-check/write operation.
 fn apply_imports(policy: &SharingPolicy, quiet: bool) -> anyhow::Result<Vec<String>> {
-    let (grants, keys, _notes, doc, _decisions, path) = plan();
+    let Scan {
+        grants,
+        keys,
+        notes: _notes,
+        doc,
+        decisions: _decisions,
+        path,
+    } = scan();
     // Do not turn an unreadable or invalid UTF-8 store into an empty document.
     match std::fs::read_to_string(&path) {
         Ok(_) => {}
@@ -959,7 +996,14 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
     } else {
         Vec::new()
     };
-    let (grants, keys, notes, doc, _decisions, _) = plan();
+    let Scan {
+        grants,
+        keys,
+        notes,
+        doc,
+        decisions: _decisions,
+        path: _,
+    } = scan();
     let sharing = sharing_document(&policy, &grants, &keys, &doc, &path);
     if args.json {
         let inventory = sharing["inventory"].as_array().unwrap();
@@ -1003,7 +1047,7 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
             reference["name"].as_str().unwrap()
         );
     }
-    for need in provider_needs() {
+    for need in provider_needs_in(&grants, &doc) {
         println!(
             "[rdsh auth] dsh default: {} {}/{} ({}, {}: presence only, authentication not verified)",
             need.profile, need.provider, need.model, need.via, need.state
@@ -1041,7 +1085,14 @@ pub fn summary_line() -> String {
             return "invalid sharing policy; imports disabled; authentication not verified".into()
         }
     };
-    let (_grants, keys, _notes, doc, decisions, _path) = plan();
+    let Scan {
+        grants: _grants,
+        keys,
+        notes: _notes,
+        doc,
+        decisions,
+        path: _path,
+    } = scan();
     if decisions.is_empty() && keys.is_empty() {
         return "no external logins found (codex/opencode)".to_string();
     }
@@ -1109,7 +1160,9 @@ fn env_key_set(name: &str) -> bool {
 /// An unselected external OAuth login does not count as a DSH connection. This is the
 /// "first boot demands a DeepSeek connection and I have no idea why" state.
 pub fn setup_needed() -> bool {
-    let (_grants, _keys, _notes, doc, _decisions, _path) = plan();
+    // Only the DSH store and inherited environment can make DSH ready.
+    // Do not crawl unrelated external login stores a second time after import.
+    let doc = load_doc(&creds_path());
     if !doc.grants.is_empty() || !doc.refs.is_empty() {
         return false;
     }
@@ -1327,8 +1380,7 @@ pub struct ProviderNeed {
 /// an OAuth record, a fresher external grant (`importable`), or the
 /// provider block's `apiKeyEnv` ref/env. This is the "detect what dsh
 /// will use and bring it over" half of first-run setup.
-pub fn provider_needs() -> Vec<ProviderNeed> {
-    let (grants, _keys, _notes, doc, _decisions, _path) = plan();
+fn provider_needs_in(grants: &[OauthGrant], doc: &CredsDoc) -> Vec<ProviderNeed> {
     let root = format!("{}/profiles", crate::inspect::dsh_home());
     let mut profiles: Vec<String> = std::fs::read_dir(&root)
         .map(|e| {
@@ -1500,12 +1552,14 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
         auto_sync();
     }
     let mut persisted: Vec<String> = Vec::new();
+    let mut known_refs: std::collections::HashSet<String> =
+        load_doc(&creds_path()).refs.keys().cloned().collect();
     for k in KNOWN_ENV_KEYS {
         let v = match std::env::var(k) {
             Ok(v) if !v.trim().is_empty() => v,
             _ => continue,
         };
-        if load_doc(&creds_path()).refs.contains_key(*k) {
+        if known_refs.contains(*k) {
             continue;
         }
         // --yes no longer implies consent to persist every environment key.
@@ -1515,6 +1569,7 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
                 creds_path()
             ));
         if take && store_ref(k, v.trim())? {
+            known_refs.insert(k.to_string());
             persisted.push(k.to_string());
         }
     }
@@ -1560,7 +1615,14 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
 /// Status document for the floating setup UI (`rdsh setup --web`).
 /// Read-only and secret-free: refs appear by name only, never by value.
 pub fn setup_status_json() -> String {
-    let (grants, keys, notes, doc, _decisions, path) = plan();
+    let Scan {
+        grants,
+        keys,
+        notes,
+        doc,
+        decisions: _decisions,
+        path,
+    } = scan();
     let policy_result = SharingPolicy::load(&crate::inspect::dsh_home());
     let policy_error = policy_result.as_ref().err().map(|e| e.to_string());
     let policy = policy_result.unwrap_or_default();
@@ -1594,7 +1656,7 @@ pub fn setup_status_json() -> String {
         "authentication": "not_verified",
         "sharing": sharing,
         "opencode_config": opencode_config_path(),
-        "defaults": provider_needs()
+        "defaults": provider_needs_in(&grants, &doc)
             .iter()
             .map(|n| {
                 serde_json::json!({"profile": n.profile, "provider": n.provider, "model": n.model, "via": n.via, "state": n.state})

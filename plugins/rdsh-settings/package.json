@@ -1,0 +1,24 @@
+{
+  "name": "rdsh-settings",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "rdsh context engine settings section (test prototype)",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "meta": {
+    "title": "rdsh設定",
+    "description": "context engine + rdsh.json 全体設定 (budget, working memory, general/search/serve/guard 他)"
+  }
+}
