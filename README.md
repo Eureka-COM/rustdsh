@@ -141,7 +141,7 @@ copied until you select a source and credential. OAuth copies use DSH's existing
 version-1 store at $DSH_HOME/.credentials.yaml; API keys use its named refs.
 The selection policy contains only identifiers at $DSH_HOME/rdsh-auth-sharing.json.
 
-~~~sh
+```sh
 rdsh auth                                      # sources, destinations, selection and undo steps
 rdsh auth --json                               # secret-free machine-readable inventory
 rdsh --dry-run auth --select codex:openai-codex --import  # preview; writes no files
@@ -152,7 +152,7 @@ rdsh auth --select env:DEEPSEEK_API_KEY --import  # explicitly persist this envi
 rdsh auth --unselect codex:openai-codex          # stop future copies; retain the existing copy
 rdsh setup                                    # sync selected credentials, then guide setup
 rdsh setup --web                              # inventory, selection commands and explicit key save
-~~~
+```
 
 Repeat --select/--unselect for individual credentials. Selecting enables future
 imports from that CLI/provider, including boot, dump-config, plugin, raw dsh
@@ -362,7 +362,7 @@ dumps, missing `--profile`) are reproduced in Rust.
 
 - Start with [CONTRIBUTING.md](CONTRIBUTING.md) (4-line PRs, screenshot rules).
 - Bugs and ideas: [issue forms](https://github.com/sahenjp/rustdsh/issues/new/choose) (Japanese OK).
-- Questions: [Discussions](https://github.com/sahenjp/rustdsh/discussions).
+- Questions: [Issues](https://github.com/sahenjp/rustdsh/issues).
 - Security: never file public issues — see [SECURITY.md](SECURITY.md).
 - Design docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md) · [docs/ROADMAP.md](docs/ROADMAP.md) ·

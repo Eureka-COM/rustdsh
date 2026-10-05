@@ -132,7 +132,7 @@ Codex / OpenCode / 環境変数の認証情報を、秘密値なしで一覧に�
 $DSH_HOME/.credentials.yamlです。選択は秘密値を含まない
 $DSH_HOME/rdsh-auth-sharing.jsonに保存します。
 
-~~~sh
+```sh
 rdsh auth                                      # 共有元・保存先・選択状態・解除手順
 rdsh auth --json                               # 秘密値を含まない機械可読の一覧
 rdsh --dry-run auth --select codex:openai-codex --import # previewのみ、ファイル変更なし
@@ -143,7 +143,7 @@ rdsh auth --select env:DEEPSEEK_API_KEY --import  # この環境変数だけ永�
 rdsh auth --unselect codex:openai-codex          # 将来の取込停止、既存コピーは保持
 rdsh setup                                    # 選択済みの同期と初回案内
 rdsh setup --web                              # 共有元・選択コマンド・個別キー保存
-~~~
+```
 
 --select / --unselectは必要なものだけ個別に繰り返せます。選択すると
 boot・dump-config・plugin・dsh名での委譲・setupでも、その共有元から
@@ -317,7 +317,7 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 
 - まず [CONTRIBUTING.md](CONTRIBUTING.md)（PRは4行、スクリーンショット規定）。
 - バグ・要望：[Issueフォーム](https://github.com/sahenjp/rustdsh/issues/new/choose)（日本語OK）。
-- 質問・相談：[Discussions](https://github.com/sahenjp/rustdsh/discussions)。
+- 質問・相談：[Issues](https://github.com/sahenjp/rustdsh/issues)。
 - 脆弱性は公開Issueに書かず [SECURITY.md](SECURITY.md) へ。
 - 設計資料：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)・
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md)・[docs/ROADMAP.md](docs/ROADMAP.md)・
