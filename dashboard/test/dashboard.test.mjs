@@ -361,6 +361,14 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   const replay = await stdio.callTool({ name: "dashboard_claim_approval", arguments: approvalUse });
   assert.notEqual(replay.isError, true);
   assert.equal(JSON.parse(replay.content[0].text).reason, "approval_retry_limit_or_replay");
+  const workerInput = { task_id: "M3.6", contract_version: 2, repository: alpha.root, run_id: "held-run", worker_role: "implementation" };
+  const worker = await call("dashboard_check_worker_start", workerInput);
+  assert.equal(worker.decision, "hold");
+  assert.equal(worker.effective_permissions, null);
+  assert.equal((await contractRequest(agentHeaders, workerInput, "workers/check")).status, 409);
+  const stdioWorker = await stdio.callTool({ name: "dashboard_check_worker_start", arguments: workerInput });
+  assert.notEqual(stdioWorker.isError, true);
+  assert.deepEqual(JSON.parse(stdioWorker.content[0].text), worker);
   const contractFile = path.join(temporary, "contract.json");
   await fs.writeFile(contractFile, JSON.stringify({ ...contractInput, expected_version: 2, purpose: "CLI revision" }));
   const runContractCli = () => promisify(execFile)(process.execPath, [

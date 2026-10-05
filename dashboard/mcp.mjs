@@ -32,6 +32,13 @@ const approvalUseSchema = object({
 }, ["id", "request_version", "task_id", "contract_version", "repository", "run_id", "command_id", "operation", "attempt", "cost_usd"]);
 export const tools = [
   {
+    name: "dashboard_check_worker_start",
+    description: "Resolve the task's requested review/implementation worker permissions. No enforcing OS adapter is registered: startup stays held, effective permissions are null, and fallback is disabled. Reported capabilities or approval cannot start a worker.",
+    inputSchema: object({ task_id: string, contract_version: { type: "integer", minimum: 1 },
+      repository: string, run_id: string, worker_role: { enum: ["review", "implementation"] } },
+    ["task_id", "contract_version", "repository", "run_id", "worker_role"]),
+  },
+  {
     name: "dashboard_update_metrics",
     description:
       "Replace reported project metrics with measured values. Omit unknown metrics; never estimate costs or cache/error rates from unrelated data. Counters are cumulative snapshots, not increments.",
@@ -153,6 +160,7 @@ const routes = {
 };
 export async function executeTool(api, name, args = {}) {
   if (name === "dashboard_get_state") return await api.getState();
+  if (name === "dashboard_check_worker_start") return await api.checkWorkerStart(args);
   if (name === "dashboard_check_task_contract") return await api.checkContract(args);
   if (name === "dashboard_check_operation") return await api.checkOperation(args);
   if (name === "dashboard_request_approval") return await api.requestApproval(args);
@@ -267,7 +275,7 @@ export async function runStdio(project) {
       signal: AbortSignal.timeout(10000),
     });
     const result = await response.json();
-    if (!response.ok && !(["api/contracts/check", "api/policy/check", "api/approvals/check", "api/approvals/claim"].includes(route) && response.status === 409))
+    if (!response.ok && !(["api/contracts/check", "api/policy/check", "api/approvals/check", "api/approvals/claim", "api/workers/check"].includes(route) && response.status === 409))
       throw new Error(result.error || `HTTP ${response.status}`);
     return result;
   }
@@ -279,6 +287,7 @@ export async function runStdio(project) {
     requestApproval: (input) => request("api/approvals/request", input),
     checkApproval: (input) => request("api/approvals/check", input),
     claimApproval: (input) => request("api/approvals/claim", input),
+    checkWorkerStart: (input) => request("api/workers/check", input),
   });
   await mcp.server.connect(new StdioServerTransport());
   // Resource subscribers receive change notifications; disconnected clients can recover with cursors.

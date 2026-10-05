@@ -271,6 +271,11 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   const claimed = await request("tools/call", { name: "dashboard_claim_approval", arguments: approvalUse });
   assert.equal(JSON.parse(claimed.content[0].text).reservation, "reserved");
   assert.equal(JSON.parse(claimed.content[0].text).execution, "hold");
+  const workerChecked = await request("tools/call", { name: "dashboard_check_worker_start", arguments: {
+    task_id: "T1", contract_version: 1, repository: project.root, run_id: "held-mcp2-run", worker_role: "review",
+  } });
+  assert.equal(JSON.parse(workerChecked.content[0].text).reason, "enforcement_adapter_unavailable");
+  assert.equal(JSON.parse(workerChecked.content[0].text).fallback, "disabled");
   const subscription = {
     name: "dashboard.answer.created",
     arguments: { project_id: project.id },

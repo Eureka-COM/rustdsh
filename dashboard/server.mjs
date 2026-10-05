@@ -13,6 +13,7 @@ import { startHarness, proxyHarness, upgradeHarness } from "./harness.mjs";
 import { EventsHub } from "./webhooks.mjs";
 import { modernMcpHandler } from "./mcp2.mjs";
 import { checkContract } from "./contracts.mjs";
+import { checkWorkerStart } from "./enforcement.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const equal = (a, b) =>
@@ -92,7 +93,7 @@ export async function startDashboard(options) {
   const modern = store
     ? modernMcpHandler(
         { getState: async () => publicState(store.value), mutate, checkContract: preflight, checkOperation: policyCheck,
-          requestApproval, checkApproval: approvalCheck, claimApproval: approvalClaim },
+          requestApproval, checkApproval: approvalCheck, claimApproval: approvalClaim, checkWorkerStart: workerStartCheck },
         eventsHub,
       )
     : null;
@@ -232,6 +233,11 @@ export async function startDashboard(options) {
     const state = await mutate("approval_claim", input);
     return state.approval_checks.at(-1);
   }
+  async function workerStartCheck(input) {
+    const task = updateQueue.then(() => checkWorkerStart(store.value, input));
+    updateQueue = task.catch(() => {});
+    return task;
+  }
   const server = http.createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
     res.setHeader("referrer-policy", "no-referrer");
@@ -257,7 +263,7 @@ export async function startDashboard(options) {
         ? url.pathname.slice(prefix.length)
         : null;
       const adminAuthorized = equal(req.headers.authorization, `Bearer ${token}`);
-      const agentRoute = route === "/mcp" || route === "/api/state" || route === "/api/contracts/check" || route === "/api/policy/check" ||
+      const agentRoute = route === "/mcp" || route === "/api/state" || route === "/api/contracts/check" || route === "/api/policy/check" || route === "/api/workers/check" ||
         ["request", "check", "claim"].some((operation) => route === `/api/approvals/${operation}`) ||
         (req.method === "POST" && ["metrics", "task", "question", "event"].some((operation) => route === `/api/update/${operation}`));
       const mcpAuthorized = kind === "project" && agentRoute && equal(req.headers.authorization, `Bearer ${mcpToken}`);
@@ -352,6 +358,8 @@ export async function startDashboard(options) {
           if (!humanAuthorized) return json(res, 403, { error: "Human browser credential required" });
           return json(res, 200, await mutate("approval_decision", await readBody(req), "human_browser"));
         }
+        if (req.method === "POST" && route === "/api/workers/check")
+          return json(res, 409, await workerStartCheck(await readBody(req)));
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
           if (["contract", "policy", "approval_request", "approval_decision", "approval_check", "approval_claim"].includes(operation))
@@ -400,6 +408,7 @@ export async function startDashboard(options) {
               requestApproval,
               checkApproval: approvalCheck,
               claimApproval: approvalClaim,
+              checkWorkerStart: workerStartCheck,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,

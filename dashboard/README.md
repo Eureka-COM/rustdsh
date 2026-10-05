@@ -4,7 +4,7 @@
 
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| `project` | Project metrics, tasks, questions, human answers, progress | Eleven project-scoped MCP tools                  |
+| `project` | Project metrics, tasks, questions, human answers, progress | Twelve project-scoped MCP tools                  |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -101,6 +101,7 @@ configuration after a restart, because the bearer key rotates.
 | `dashboard_request_approval` | Create a pending request bound to one operation and its limits |
 | `dashboard_check_approval` | Match a human grant to the current operation and next attempt |
 | `dashboard_claim_approval` | Atomically reserve one approved attempt and declared cost |
+| `dashboard_check_worker_start` | Resolve requested permissions and hold startup without an enforcing adapter |
 
 Example tool arguments:
 
@@ -315,6 +316,31 @@ and `enforcement: not_applied`; its use record is `execution: not_started`.
 There is no operation execution, automatic refund, billing integration or DSH
 tool interception. An enforcing execution adapter must perform a fresh check and
 bind actual effects/cost before this ledger can grant effective permissions.
+
+### Unsupported execution environments (Issue #33 foundation)
+
+`dashboard_check_worker_start` (`POST /api/workers/check`) accepts `task_id`,
+`contract_version`, `repository`, `run_id`, `worker_role` (`review` or
+`implementation`). It resolves the current contract into **requested**
+permissions. Review workers request read roots with no writes, executables or
+network. Implementation workers request only the contract's declared roots,
+exact command/argv rules and network origins. Callers cannot supply wider roots,
+capability flags, a sandbox identity or an approval to bypass this check.
+
+There is currently **no registered OS/container enforcing adapter**. Every valid
+request returns `decision: hold`, `reason: enforcement_adapter_unavailable`,
+`execution: not_started`, `effective_permissions: null` and `fallback: disabled`.
+HTTP returns 409; MCP returns the same structured hold. This function starts no
+worker and changes no ACL, credential, firewall, container or system setting.
+Unparsed inputs and stale/outside contracts cannot start a worker either.
+
+An adapter must prove filesystem read/write restrictions, network and exact
+command limits, child-process inheritance, link escape protection and race-safe
+access before effective permissions can be reported. Realpath preflight cannot
+detect hardlink aliases or mounted filesystems, and can race with filesystem
+changes. The original DSH launcher remains independent and does not call this
+gate. Real OS refusal tests and launcher interception are still required; the
+isolated source tests establish the unsupported-environment hold only.
 
 ## OpenAI ChatGPT Dots and MCP Events
 
