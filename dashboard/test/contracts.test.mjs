@@ -146,6 +146,25 @@ test("dangling symlink input is unresolved rather than a writable missing leaf",
     if (error.code === "EPERM") { t.skip("Creating this symlink requires OS permission"); return; }
     throw error;
   }
-  assert.equal((await checkContract(store.value, { ...check, write_paths: [path.join(link, "file.txt")] })).decision, "unparsed");
+  const result = await checkContract(store.value, { ...check, write_paths: [path.join(link, "file.txt")] });
+  assert.equal(result.decision, "unparsed");
+  assert.equal(result.reason, "unsupported_or_unresolved_input");
+  await fs.unlink(link);
+});
+
+test("a realpath result for a missing junction target remains unresolved without rejecting normal missing leaves", async (t) => {
+  const { store, input, check, src, root } = await fixture(t);
+  await store.mutate("contract", input, "local_administrator");
+  const target = path.join(root, "missing-target"), link = path.join(src, "dangling");
+  await fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+  const realpath = fs.realpath.bind(fs);
+  // Reproduce the Windows/Node 22 junction behavior independently of the
+  // local runtime: a canonical target string is returned even when absent.
+  t.mock.method(fs, "realpath", async (file, ...args) =>
+    path.resolve(file) === path.resolve(link) ? target : realpath(file, ...args));
+  const unresolved = await checkContract(store.value, { ...check, write_paths: [path.join(link, "file.txt")] });
+  assert.equal(unresolved.decision, "unparsed");
+  assert.equal(unresolved.reason, "unsupported_or_unresolved_input");
+  assert.equal((await checkContract(store.value, check)).decision, "within_scope");
   await fs.unlink(link);
 });
