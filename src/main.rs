@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 mod auth;
 mod compact;
+mod context;
 mod dsh_args;
 mod guard;
 mod inspect;
@@ -145,6 +146,11 @@ enum Commands {
         #[arg(long = "n", default_value_t = 5)]
         n: u32,
     },
+    /// Context engine prototype (test): rebuild per-turn context from local files
+    Context {
+        #[command(subcommand)]
+        action: ContextAction,
+    },
     /// Hook helper for hooks.json: block stdin text matching --deny (exit 2)
     Guard {
         #[arg(long = "deny")]
@@ -153,6 +159,37 @@ enum Commands {
         reason: Option<String>,
         #[arg(long = "json")]
         json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ContextAction {
+    /// Assemble the context to pass to the LLM this turn (prototype)
+    Build {
+        #[arg(long = "query")]
+        query: Option<String>,
+        #[arg(long = "budget")]
+        budget: Option<usize>,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Search code + sessions for query-related info only (prototype)
+    Search {
+        query: String,
+        #[arg(long = "max", default_value_t = 20)]
+        max: usize,
+    },
+    /// Show current goal, memory, and token usage (prototype)
+    Status {
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Explain why each section was included (prototype)
+    Explain {
+        #[arg(long = "query")]
+        query: Option<String>,
+        #[arg(long = "budget")]
+        budget: Option<usize>,
     },
 }
 
@@ -179,6 +216,7 @@ const NATIVE_FIRST: &[&str] = &[
     "auth",
     "setup",
     "search-web",
+    "context",
 ];
 
 fn invoked_as_dsh() -> bool {
@@ -233,6 +271,16 @@ fn main() {
         Some(Commands::Serve { port }) => serve::cmd_serve(port),
         Some(Commands::Bench { n }) => bench(n),
         Some(Commands::Guard { deny, reason, json }) => guard::cmd_guard(deny, reason, json),
+        Some(Commands::Context { action }) => match action {
+            ContextAction::Build {
+                query,
+                budget,
+                json,
+            } => context::cmd_build(query, budget, json),
+            ContextAction::Search { query, max } => context::cmd_search(query, max),
+            ContextAction::Status { json } => context::cmd_status(json),
+            ContextAction::Explain { query, budget } => context::cmd_explain(query, budget),
+        },
         Some(Commands::Auth { import, json }) => auth::cmd_auth(import, json),
         Some(Commands::Setup {
             open,

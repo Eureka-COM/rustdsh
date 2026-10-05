@@ -1,0 +1,4 @@
+- insert:
+    - id: rdsh-settings
+      name: "rdsh-settings"
+      config: {}
