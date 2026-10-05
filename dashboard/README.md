@@ -1,5 +1,9 @@
 # Project dashboard and private Harness access
 
+[CLI adapter contract](../docs/CLI-ADAPTERS.md): version-checked DSH ACP
+start/resume/send/interrupt/stop/usage, explicit unsupported CLI capabilities,
+and isolated lifecycle smoke without provider credentials or model requests.
+
 `rdsh-dashboard` provides two separate entry points:
 
 | Mode      | Purpose                                                    | Data source                                      |

@@ -6,6 +6,8 @@ import { spawn } from "node:child_process";
 import { identity, stateHome } from "./state.mjs";
 import { startDashboard } from "./server.mjs";
 import { runStdio } from "./mcp.mjs";
+import { adapterCatalog, createCliAdapter } from "./adapters.mjs";
+import { smokeAdapter } from "./adapter-smoke.mjs";
 
 const help = `rdsh-dashboard project --project <directory> [--port <port>] [--no-tailscale] [--open]
 rdsh-dashboard harness [--port 38081] [--harness-port 3081] [--no-tailscale] [--open]
@@ -14,6 +16,8 @@ rdsh-dashboard stop --project <directory> | --harness
 rdsh-dashboard revoke-events --project <directory>
 rdsh-dashboard tunnel --project <directory> --tunnel-id <tunnel_id>
 rdsh-dashboard mcp --project <directory>
+rdsh-dashboard adapters [--cli dsh] [--executable <original-dsh>] [--entrypoint <bin.js>] [--project <directory>]
+rdsh-dashboard adapter-smoke --executable <original-dsh> [--entrypoint <bin.js>] [--project <directory>]
 
 Project mode: project metrics, tasks, questions, human feedback, and /mcp.
 Harness mode: a separate managed DeepSeek Harness Web UI and QR landing page.
@@ -29,6 +33,9 @@ const { values, positionals } = parseArgs({
     "tunnel-id": { type: "string" },
     open: { type: "boolean" },
     harness: { type: "boolean" },
+    cli: { type: "string" },
+    executable: { type: "string" },
+    entrypoint: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -57,6 +64,43 @@ try {
   const command = positionals[0];
   if (values.help || !command) {
     console.log(help);
+  } else if (command === "adapters" || command === "adapter-smoke") {
+    const argv = values.executable ? [values.executable] : null;
+    if (values.entrypoint && !argv)
+      throw new Error("--entrypoint requires --executable");
+    if (values.entrypoint) argv.push(values.entrypoint);
+    if (command === "adapter-smoke") {
+      if (!argv)
+        throw new Error(
+          "Specify the original DSH executable with --executable",
+        );
+      if (values.cli && values.cli !== "dsh")
+        throw new Error("Smoke supports the DSH ACP adapter only");
+      console.log(
+        JSON.stringify(
+          await smokeAdapter({
+            command: argv,
+            cwd: values.project || process.cwd(),
+          }),
+          null,
+          2,
+        ),
+      );
+    } else if (values.cli) {
+      const adapter = createCliAdapter({
+        cli: values.cli,
+        command: argv,
+        cwd: values.project || process.cwd(),
+      });
+      const report = await adapter.probe();
+      console.log(JSON.stringify(report, null, 2));
+      if (!["version_matched", "compatible"].includes(report.health))
+        process.exitCode = 1;
+    } else {
+      if (values.executable || values.entrypoint)
+        throw new Error("Specify --cli when probing an executable");
+      console.log(JSON.stringify({ adapters: adapterCatalog() }, null, 2));
+    }
   } else if (["open", "stop", "revoke-events"].includes(command)) {
     const project = values.harness
       ? null
