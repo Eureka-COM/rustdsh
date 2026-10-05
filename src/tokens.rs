@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 /// - #80 inline type-declaration budgets compare against this estimate.
 /// - #81 small-state snapshots use it to check size limits.
 /// - #82 classifier fan-out sums per-call estimates via this function.
+///
 /// Formula is frozen; keep doc/test-only changes in this area.
 pub fn estimate_tokens(s: &str) -> usize {
     if s.is_ascii() {
