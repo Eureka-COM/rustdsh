@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { prepareContract } from "./contracts.mjs";
+import { evaluateOperation } from "./policy.mjs";
 
 export const metricNames = [
   "total_cost_usd",
@@ -95,6 +96,13 @@ export class ProjectStore {
         next.contracts.push(history);
       }
       history.versions.push(version);
+    } else if (operation === "policy") {
+      const result = await evaluateOperation(next, input);
+      next.policy_checks ||= [];
+      next.policy_checks.push({
+        id: `policy_${next.revision + 1}`, checked_at: new Date().toISOString(), ...result,
+      });
+      next.policy_checks = next.policy_checks.slice(-1000);
     } else {
       applyOperation(next, operation, input);
     }
@@ -107,6 +115,7 @@ export class ProjectStore {
       event: "dashboard.progress.updated",
       metrics: "dashboard.metrics.updated",
       contract: "dashboard.contract.updated",
+      policy: "dashboard.policy.checked",
     };
     const summary =
       operation === "answer"
@@ -115,7 +124,9 @@ export class ProjectStore {
           ? input.question
           : operation === "contract"
             ? "タスク契約を更新"
-            : input.title || "指標を更新";
+            : operation === "policy"
+              ? "操作構造を照合"
+              : input.title || "指標を更新";
     next.changes ||= [];
     next.changes.push({
       eventId: `evt_${this.project.id}_${next.revision}`,
@@ -124,7 +135,7 @@ export class ProjectStore {
       data: {
         project_id: this.project.id,
         revision: next.revision,
-        entity_id: input.id || input.task_id || "",
+        entity_id: input?.id || input?.task_id || "",
         summary: String(summary).slice(0, 1000),
       },
       cursor: null,

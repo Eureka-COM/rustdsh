@@ -4,7 +4,7 @@
 
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| `project` | Project metrics, tasks, questions, human answers, progress | Seven project-scoped MCP tools                   |
+| `project` | Project metrics, tasks, questions, human answers, progress | Eight project-scoped MCP tools                   |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -97,6 +97,7 @@ configuration after a restart, because the bearer key rotates.
 | `dashboard_get_feedback`   | Read durable answers after a sequence cursor |
 | `dashboard_get_state`      | Read this project's current state            |
 | `dashboard_check_task_contract` | Preflight declared repo/cwd/write paths against a versioned task contract |
+| `dashboard_check_operation` | Parse/audit explicit tool attributes; keep execution on hold |
 
 Example tool arguments:
 
@@ -212,6 +213,53 @@ tool/command policy (Issue #29), approval matching (Issue #30), input provenance
 execution permissions. Filesystem or contract changes after preflight can
 invalidate a result; recheck at use, and rely on an execution sandbox for enforcement.
 
+### Structured operation policy (Issue #29 foundation)
+
+Contracts may add `operation_policy` with `schema: 1`, `read_roots`, `executables`
+and `network_origins`. Omission grants no read/command/network rights in this
+structural layer. Write roots remain the contract's `write_roots`. Read roots must
+be existing directories inside the project. Each executable rule has an absolute
+existing `file` and an exact `args` array; the stored rule retains the argument
+count and SHA-256 digest, without raw argument values. Network rules are exact
+HTTPS origins without credentials, paths, queries or fragments.
+
+`dashboard_check_operation` (or `POST /api/policy/check`) accepts task ID, contract
+version, repository and this explicit operation envelope:
+
+```json
+{
+  "schema": "rdsh.operation.v1",
+  "tool_name": "file.write",
+  "tool_input": {"cwd": "/path/to/repo", "path": "src/new.txt", "content": "fixture"}
+}
+```
+
+Supported tool input schemas are:
+
+| Tool | Required input fields |
+| --- | --- |
+| `file.read` | `cwd`, `path` (existing regular file) |
+| `file.write` | `cwd`, `path`, `content` (at most 64 KiB) |
+| `process.exec` | `cwd`, `executable` (absolute file), `args` (exact direct argv) |
+| `network.request` | `cwd`, `url` (HTTPS), `method`, `body` (at most 64 KiB) |
+
+Unknown tools/fields, raw shell commands, recognized shell executables, ambiguous
+paths and unresolved inputs return `unparsed`. This does not infer a tool's
+effects from words in its text. Path, cwd, executable/argv and origin mismatches
+return `block`. Only supported attributes inside the current policy return
+`within_policy`; execution still returns `hold`. These are rdsh's declared input
+schemas, not claims that external CLI tools are already adapted.
+
+The latest 1,000 checks are durable and displayed separately from the contract.
+Reasons are fixed codes; bodies, URL queries and raw argument values are omitted
+from audit state. Digests bind data without duplicating it; hashes are not secret
+storage or encryption. File metadata and real paths are inspected, file contents
+are never read. The existing Rust pattern guard remains independent and is not
+called by this layer. Responses explicitly identify pattern as `not_evaluated`,
+structure as the decision, and enforcement as `not_applied`. No declared command
+or network operation is executed. Automatic CLI tool interception, shell
+semantics, dynamic subprocess effects and OS enforcement remain unconnected.
+
 ## OpenAI ChatGPT Dots and MCP Events
 
 The project HTTP `/mcp` endpoint implements MCP 2.0 (`2026-07-28`) discovery and
@@ -224,6 +272,7 @@ project bearer authentication used for tools. Available events:
 - `dashboard.progress.updated`
 - `dashboard.metrics.updated`
 - `dashboard.contract.updated`
+- `dashboard.policy.checked`
 
 Each requires the project's `project_id` filter. Subscribe to
 `dashboard.answer.created` when a Dot should react to human replies, then retrieve

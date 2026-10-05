@@ -101,6 +101,19 @@ export const tools = [
       write_paths: { type: "array", maxItems: 100, items: string },
     }, ["task_id", "contract_version", "repository", "cwd", "write_paths"]),
   },
+  {
+    name: "dashboard_check_operation",
+    description:
+      "Parse and audit a declared rdsh.operation.v1 tool operation against the task contract. Supported schemas: file.read, file.write, process.exec with direct argv, network.request. Unknown tools, fields and shell syntax are unparsed. within_policy is only structural preflight; execution remains on hold without approval and an enforcing adapter.",
+    inputSchema: object({
+      task_id: string, contract_version: { type: "integer", minimum: 1 }, repository: string,
+      operation: object({
+        schema: { const: "rdsh.operation.v1" },
+        tool_name: { enum: ["file.read", "file.write", "process.exec", "network.request"] },
+        tool_input: { type: "object" },
+      }, ["schema", "tool_name", "tool_input"]),
+    }, ["task_id", "contract_version", "repository", "operation"]),
+  },
 ];
 const routes = {
   dashboard_update_metrics: "metrics",
@@ -111,6 +124,7 @@ const routes = {
 export async function executeTool(api, name, args = {}) {
   if (name === "dashboard_get_state") return await api.getState();
   if (name === "dashboard_check_task_contract") return await api.checkContract(args);
+  if (name === "dashboard_check_operation") return await api.checkOperation(args);
   if (name === "dashboard_get_feedback")
     return feedbackSince(await api.getState(), args.after ?? 0);
   if (routes[name]) {
@@ -220,7 +234,7 @@ export async function runStdio(project) {
       signal: AbortSignal.timeout(10000),
     });
     const result = await response.json();
-    if (!response.ok && !(route === "api/contracts/check" && response.status === 409))
+    if (!response.ok && !(["api/contracts/check", "api/policy/check"].includes(route) && response.status === 409))
       throw new Error(result.error || `HTTP ${response.status}`);
     return result;
   }
@@ -228,6 +242,7 @@ export async function runStdio(project) {
     getState: () => request("api/state"),
     mutate: (operation, input) => request(`api/update/${operation}`, input),
     checkContract: (input) => request("api/contracts/check", input),
+    checkOperation: (input) => request("api/policy/check", input),
   });
   await mcp.server.connect(new StdioServerTransport());
   // Resource subscribers receive change notifications; disconnected clients can recover with cursors.

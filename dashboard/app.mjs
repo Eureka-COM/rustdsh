@@ -135,6 +135,9 @@ function render(state) {
             ["対象repo", contract.repository],
             ["許可範囲", contract.allowed_scope],
             ["書込先", contract.write_roots.join("\n") || "書込不可"],
+            ["読取先", contract.operation_policy?.read_roots.join("\n") || "構造policyでは未許可"],
+            ["実行file", contract.operation_policy?.executables.map((rule) => `${rule.file} (${rule.argument_count}引数・hash照合)`).join("\n") || "未許可"],
+            ["network origin", contract.operation_policy?.network_origins.join("\n") || "未許可"],
             ["禁止事項", contract.forbidden_actions.join("\n") || "記載なし"],
             ["終了条件", contract.completion_conditions.join("\n")],
             ["変更理由", contract.change_reason],
@@ -154,6 +157,15 @@ function render(state) {
   );
   if (!state.tasks.length)
     $("tasks").append(emptyRow("タスクはまだ登録されていません", 4));
+  $("policy-checks").replaceChildren(
+    node("p", "文字列filter・操作構造の照合・実環境の強制は別の層です。shell構文は未対応、sandboxは未適用です。", "notice"),
+    ...(state.policy_checks || []).slice(-10).reverse().map((check) => {
+      const element = node("article", undefined, "event");
+      element.append(node("strong", `${check.id}: ${check.decision}`),
+        node("p", `${check.reason} ・ 実行: ${check.execution}`));
+      return element;
+    }),
+  );
   // Preserve in-progress human drafts while incoming events refresh the dashboard.
   const drafts = new Map(
     [...$("questions").querySelectorAll("textarea")].map((area) => [

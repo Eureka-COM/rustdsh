@@ -246,6 +246,19 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   assert.deepEqual(revisions.map((response) => response.status).sort(), [200, 400]);
   assert.equal((await call("dashboard_check_task_contract", preflight)).reason, "contract_version_changed");
   assert.equal((await call("dashboard_check_task_contract", { ...preflight, contract_version: 2 })).decision, "within_scope");
+  const policyInput = {
+    task_id: "M3.6", contract_version: 2, repository: alpha.root,
+    operation: { schema: "rdsh.operation.v1", tool_name: "file.write", tool_input: { cwd: alpha.root, path: "new-file", content: "dummy-secret-policy-content" } },
+  };
+  const policyResult = await call("dashboard_check_operation", policyInput);
+  assert.equal(policyResult.decision, "within_policy");
+  assert.equal(policyResult.execution, "hold");
+  assert.ok(!JSON.stringify(policyResult).includes("dummy-secret-policy-content"));
+  const policyDenied = await contractRequest(agentHeaders, {
+    ...policyInput, operation: { ...policyInput.operation, tool_input: { ...policyInput.operation.tool_input, cwd: beta.root } },
+  }, "policy/check");
+  assert.equal(policyDenied.status, 409);
+  assert.equal((await policyDenied.json()).reason, "cwd_outside_contract");
   await call("dashboard_ask_question", {
     id: "Q1",
     question: "Choose a test answer",
@@ -328,6 +341,9 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   });
   assert.notEqual(stdioCheck.isError, true);
   assert.equal(JSON.parse(stdioCheck.content[0].text).reason, "contract_version_changed");
+  const stdioPolicy = await stdio.callTool({ name: "dashboard_check_operation", arguments: policyInput });
+  assert.notEqual(stdioPolicy.isError, true);
+  assert.equal(JSON.parse(stdioPolicy.content[0].text).operation_digest, policyResult.operation_digest);
   const contractFile = path.join(temporary, "contract.json");
   await fs.writeFile(contractFile, JSON.stringify({ ...contractInput, expected_version: 2, purpose: "CLI revision" }));
   const runContractCli = () => promisify(execFile)(process.execPath, [

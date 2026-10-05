@@ -243,6 +243,13 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   const checkInput = { task_id: "T1", contract_version: 1, repository: project.root, cwd: project.root, write_paths: [] };
   const checked = await request("tools/call", { name: "dashboard_check_task_contract", arguments: checkInput });
   assert.equal(JSON.parse(checked.content[0].text).decision, "within_scope");
+  const policyChecked = await request("tools/call", {
+    name: "dashboard_check_operation",
+    arguments: { task_id: "T1", contract_version: 1, repository: project.root,
+      operation: { schema: "rdsh.operation.v1", tool_name: "file.write", tool_input: { cwd: project.root, path: "new.txt", content: "fixture" } } },
+  });
+  assert.equal(JSON.parse(policyChecked.content[0].text).decision, "block");
+  assert.equal(JSON.parse(policyChecked.content[0].text).execution, "hold");
   const subscription = {
     name: "dashboard.answer.created",
     arguments: { project_id: project.id },

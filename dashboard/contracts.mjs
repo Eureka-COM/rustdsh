@@ -1,28 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const contractKeys = [
   "task_id", "expected_version", "purpose", "repository", "allowed_scope",
-  "write_roots", "forbidden_actions", "completion_conditions", "change_reason",
+  "write_roots", "forbidden_actions", "completion_conditions", "change_reason", "operation_policy",
 ];
 const checkKeys = ["task_id", "contract_version", "repository", "cwd", "write_paths"];
 
-function object(value, keys) {
+export function object(value, keys) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
       Object.keys(value).some((key) => !keys.includes(key)))
     throw new Error("Unsupported contract input fields");
 }
-function text(value, label, max = 8000) {
+export function text(value, label, max = 8000) {
   if (typeof value !== "string" || !value.trim() || value.length > max || value.includes("\0"))
     throw new Error(`Invalid ${label}`);
   return value;
 }
-function strings(value, label, minimum = 0) {
+export function strings(value, label, minimum = 0) {
   if (!Array.isArray(value) || value.length < minimum || value.length > 100)
     throw new Error(`Invalid ${label}`);
   return value.map((item) => text(item, label, 2000));
 }
-function version(value, minimum) {
+export function version(value, minimum) {
   if (!Number.isSafeInteger(value) || value < minimum)
     throw new Error("Invalid contract version");
 }
@@ -31,7 +32,7 @@ export function contains(root, candidate) {
   return relative === "" || (!path.isAbsolute(relative) && relative !== ".." &&
     !relative.startsWith(".." + path.sep));
 }
-function filePath(value, label) {
+export function filePath(value, label) {
   text(value, label, 2000);
   // Reject ambiguous traversal, device paths and Windows alternate data streams.
   // A preflight never interprets these as a supported filesystem operation.
@@ -45,7 +46,7 @@ function filePath(value, label) {
     throw new Error("Ambiguous Windows path is unsupported");
   return value;
 }
-async function directory(value, label) {
+export async function directory(value, label) {
   filePath(value, label);
   if (!path.isAbsolute(value)) throw new Error(`${label} must be absolute`);
   try {
@@ -58,6 +59,44 @@ async function directory(value, label) {
 }
 export function activeContract(state, taskId) {
   return state.contracts?.find((item) => item.task_id === taskId)?.versions.at(-1) || null;
+}
+
+export function digest(value) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+export function networkOrigin(value) {
+  const url = new URL(text(value, "network origin", 2000));
+  if (url.protocol !== "https:" || url.username || url.password || url.hash ||
+      url.search || url.pathname !== "/") throw new Error("Invalid network origin");
+  return url.origin;
+}
+async function prepareOperationPolicy(input, repository) {
+  if (input === undefined) return { schema: 1, read_roots: [], executables: [], network_origins: [] };
+  object(input, ["schema", "read_roots", "executables", "network_origins"]);
+  if (input.schema !== 1) throw new Error("Unsupported operation policy schema");
+  const roots = [];
+  for (const value of strings(input.read_roots, "read_roots")) {
+    const root = await directory(value, "read root");
+    if (!contains(repository, root)) throw new Error("Read root is outside the repository");
+    if (!roots.includes(root)) roots.push(root);
+  }
+  if (!Array.isArray(input.executables) || input.executables.length > 100)
+    throw new Error("Invalid executable policy");
+  const executables = [];
+  for (const command of input.executables) {
+    object(command, ["file", "args"]);
+    filePath(command.file, "executable");
+    if (!path.isAbsolute(command.file)) throw new Error("Executable must be absolute");
+    let file;
+    try {
+      file = await fs.realpath(command.file);
+      if (!(await fs.stat(file)).isFile()) throw new Error("Not a file");
+    } catch { throw new Error("Cannot resolve executable file"); }
+    const args = strings(command.args, "arguments");
+    executables.push({ file, argument_count: args.length, arguments_digest: digest(args) });
+  }
+  const origins = strings(input.network_origins, "network_origins").map(networkOrigin);
+  return { schema: 1, read_roots: roots, executables, network_origins: [...new Set(origins)] };
 }
 
 export async function prepareContract(state, input) {
@@ -83,6 +122,7 @@ export async function prepareContract(state, input) {
     repository,
     allowed_scope: text(input.allowed_scope, "allowed_scope"),
     write_roots: writeRoots,
+    operation_policy: await prepareOperationPolicy(input.operation_policy, repository),
     forbidden_actions: strings(input.forbidden_actions, "forbidden_actions"),
     completion_conditions: strings(input.completion_conditions, "completion_conditions", 1),
     change_reason: text(input.change_reason, "change_reason", 2000),
@@ -93,7 +133,7 @@ export async function prepareContract(state, input) {
   };
 }
 
-async function destination(value, cwd, repository) {
+export async function destination(value, cwd, repository) {
   filePath(value, "write path");
   const components = path.relative(repository, path.resolve(cwd, value)).split(path.sep).filter(Boolean);
   let current = repository;

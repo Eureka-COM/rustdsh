@@ -76,6 +76,7 @@ const names = [
   "dashboard.progress.updated",
   "dashboard.metrics.updated",
   "dashboard.contract.updated",
+  "dashboard.policy.checked",
 ];
 export const eventDefinitions = names.map((name) => ({
   name,

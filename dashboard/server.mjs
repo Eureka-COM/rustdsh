@@ -91,7 +91,7 @@ export async function startDashboard(options) {
   const sockets = new Set();
   const modern = store
     ? modernMcpHandler(
-        { getState: async () => publicState(store.value), mutate, checkContract: preflight },
+        { getState: async () => publicState(store.value), mutate, checkContract: preflight, checkOperation: policyCheck },
         eventsHub,
       )
     : null;
@@ -215,6 +215,10 @@ export async function startDashboard(options) {
     updateQueue = task.catch(() => {});
     return task;
   }
+  async function policyCheck(input) {
+    const state = await mutate("policy", input);
+    return state.policy_checks.at(-1);
+  }
   const server = http.createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
     res.setHeader("referrer-policy", "no-referrer");
@@ -240,7 +244,7 @@ export async function startDashboard(options) {
         ? url.pathname.slice(prefix.length)
         : null;
       const adminAuthorized = equal(req.headers.authorization, `Bearer ${token}`);
-      const agentRoute = route === "/mcp" || route === "/api/state" || route === "/api/contracts/check" ||
+      const agentRoute = route === "/mcp" || route === "/api/state" || route === "/api/contracts/check" || route === "/api/policy/check" ||
         (req.method === "POST" && ["metrics", "task", "question", "event"].some((operation) => route === `/api/update/${operation}`));
       const mcpAuthorized = kind === "project" && agentRoute && equal(req.headers.authorization, `Bearer ${mcpToken}`);
       const humanAuthorized = browserAuthorized(req, url, route);
@@ -320,9 +324,13 @@ export async function startDashboard(options) {
           const result = await preflight(await readBody(req));
           return json(res, result.decision === "within_scope" ? 200 : 409, result);
         }
+        if (req.method === "POST" && route === "/api/policy/check") {
+          const result = await policyCheck(await readBody(req));
+          return json(res, result.decision === "within_policy" ? 200 : 409, result);
+        }
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
-          if (operation === "contract")
+          if (["contract", "policy"].includes(operation))
             return json(res, 403, { error: "Use the administrator contract endpoint" });
           if (operation === "answer" ? !humanAuthorized : !(mcpAuthorized || adminAuthorized))
             return json(res, 403, { error: "This credential cannot perform that operation" });
@@ -364,6 +372,7 @@ export async function startDashboard(options) {
               getState: async () => publicState(store.value),
               mutate,
               checkContract: preflight,
+              checkOperation: policyCheck,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,
