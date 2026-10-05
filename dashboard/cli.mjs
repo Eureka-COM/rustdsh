@@ -33,8 +33,12 @@ const { values, positionals } = parseArgs({
   },
 });
 function openUrl(url) {
-  if (process.platform !== "win32")
-    throw new Error("Browser opening is supported by the Windows launcher");
+  // Non-Windows shells can't hand a URL to a browser here; print it so
+  // `rdsh-dashboard open` still resolves to something usable.
+  if (process.platform !== "win32") {
+    console.log(url);
+    return;
+  }
   const child = spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], {
     windowsHide: true,
     detached: true,

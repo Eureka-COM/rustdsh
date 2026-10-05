@@ -24,7 +24,33 @@ if command -v flock >/dev/null 2>&1; then
   exec 9>"$LOCK" || exit 1
   flock -n 9 || { log "another sync is running; exit"; exit 0; }
 fi
-export PATH="$HOME/.local/bin:$HOME/.local/opt/node-v24.16.0-linux-x64/bin:$HOME/.cargo/bin:$PATH"
+# Resolve the newest locally-installed node-v* tree (same "latest matching
+# tree" rule rdsh itself uses) instead of a pinned version dir.
+node_tree_bin() {
+  _os="$(uname -s 2>/dev/null | tr 'A-Z' 'a-z')"
+  _arch="$(uname -m 2>/dev/null)"
+  case "$_arch" in
+    aarch64|arm64) _arch=arm64 ;;
+    x86_64) _arch=x64 ;;
+  esac
+  # macOS/linux dirnames follow node-vX.Y.Z-<os>-<arch>; pick the latest by
+  # numeric sort (sort -V is GNU-only and absent on macOS).
+  _best=""; _bestv=""
+  for d in "$HOME"/.local/opt/node-v*-"$_os"-"$_arch"; do
+    [ -d "$d" ] || continue
+    _v="${d##*/node-v}"; _v="${_v%%-*}"
+    if [ -z "$_best" ] || [ "$(printf '%s\n%s\n' "$_v" "$_bestv" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1)" = "$_v" ]; then
+      _best="$d"; _bestv="$_v"
+    fi
+  done
+  [ -n "$_best" ] && printf '%s' "$_best/bin"
+}
+NODEBIN="$(node_tree_bin || true)"
+if [ -n "$NODEBIN" ]; then
+  export PATH="$HOME/.local/bin:$NODEBIN:$HOME/.cargo/bin:$PATH"
+else
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+fi
 write_state() {
   printf "{\"updated\":true,\"kind\":\"%s\",\"from\":\"%s\",\"to\":\"%s\",\"at\":%s}\n" \
     "$1" "$2" "$3" "$(date +%s)000" > "$LOGDIR/update-state.json"
@@ -92,7 +118,7 @@ fetch_rdsh_release() {
   return $rc
 }
 NPM=""
-for cand in "${NPM_BIN:-}" "$HOME/.local/bin/npm" "$HOME/.local/opt/node-v24.16.0-linux-x64/bin/npm" "$(command -v npm 2>/dev/null)"; do
+for cand in "${NPM_BIN:-}" "$HOME/.local/bin/npm" "$NODEBIN/npm" "$(command -v npm 2>/dev/null)"; do
   if [ -n "$cand" ] && [ -x "$cand" ]; then NPM="$cand"; break; fi
 done
 if [ -z "$NPM" ]; then log "npm not found; set NPM_BIN"; exit 1; fi
@@ -103,10 +129,26 @@ INSTALLED="$(node -p "require(process.argv[1]).version" "$PKGROOT/package.json" 
 if [ -z "$INSTALLED" ]; then log "cannot read installed version"; exit 1; fi
 ALL="$("$NPM" view @deepseek-ai/dsh versions --json 2>/dev/null | tr -d " [],\"" | tr "," "\n" | grep -E "^[0-9]+\.[0-9]+\.[0-9]+" || true)"
 if [ -z "$ALL" ]; then log "registry unreachable; try later"; exit 0; fi
+# sort -V is GNU-only (absent on macOS/BSD). Use it when present so the
+# ordering is unchanged there; otherwise fall back to an awk key sort
+# (major.minor.patch, then -rc.N after the bare release).
+if printf '1\n' | sort -V >/dev/null 2>&1; then
+  version_sort() { sort -V; }
+else
+  version_sort() {
+    awk '{
+      v=$0; s=$0;
+      rc=""; if (sub(/-rc\./, " ", s)) { split(s, a, " "); s=a[1]; rc=a[2] }
+      tag=(rc=="" ? 0 : 1); n=(rc=="" ? 0 : rc)+0;
+      split(s, p, ".");
+      printf "%d.%d.%d.%d.%09d\t%s\n", p[1], p[2], p[3], tag, n, v
+    }' | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n | cut -f2-
+  }
+fi
 pick() {
   case "$CHANNEL" in
-    any) printf "%s\n" $ALL | sort -V | tail -n 1 ;;
-    *) printf "%s\n" $ALL | grep -E "^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$" | sort -V | tail -n 1 ;;
+    any) printf "%s\n" $ALL | version_sort | tail -n 1 ;;
+    *) printf "%s\n" $ALL | grep -E "^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$" | version_sort | tail -n 1 ;;
   esac
 }
 LATEST="$(pick)"

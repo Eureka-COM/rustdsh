@@ -62,10 +62,11 @@ ver_lt() {
   awk -v a="$1" -v b="$2" 'BEGIN { n=split(a,aa,"."); m=split(b,bb,"."); k=(n>m?n:m); for(i=1;i<=k;i++){x=(aa[i]==""?0:aa[i]); y=(bb[i]==""?0:bb[i]); if(x<y) exit 0; if(x>y) exit 1;} exit 1; }'
 }
 want_musl() {
-  # Explicit --musl / RDSH_MUSL=1 wins; otherwise auto-select musl on old glibc.
+  # Explicit --musl / RDSH_MUSL=1 wins; otherwise auto-select musl when the
+  # glibc passed in $1 (computed once by fetch_release) is older than 2.34.
   if [ "${USE_MUSL:-0}" = 1 ]; then return 0; fi
   if [ "$OS/$ARCH" = "Linux/x86_64" ]; then
-    gv="$(glibc_version)"
+    gv="${1:-}"
     if [ -n "$gv" ] && ver_lt "$gv" "2.34"; then return 0; fi
   fi
   return 1
@@ -104,9 +105,9 @@ fetch_release() {
   base="${RDSH_RELEASE_BASE:-https://github.com/sahenjp/rustdsh/releases}"
   case "$OS/$ARCH" in
     Linux/x86_64)
-      if want_musl; then asset="rdsh-linux-x64-musl.tar.gz"; else asset="rdsh-linux-x64.tar.gz"; fi
+      gv="$(glibc_version)"
+      if want_musl "$gv"; then asset="rdsh-linux-x64-musl.tar.gz"; else asset="rdsh-linux-x64.tar.gz"; fi
       if [ "${USE_MUSL:-0}" != 1 ]; then
-        gv="$(glibc_version)"
         if [ -n "$gv" ] && ver_lt "$gv" "2.34"; then echo "glibc $gv < 2.34: selecting static musl build" >&2; fi
       else
         echo "selecting static musl build (--musl / RDSH_MUSL=1)" >&2

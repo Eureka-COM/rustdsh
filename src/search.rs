@@ -246,12 +246,8 @@ fn truncate(s: &str, n: usize) -> String {
         return s.to_string();
     }
     let mut t: String = s.chars().take(n).collect();
-    t.push(gt_sign());
+    t.push('>');
     t
-}
-
-fn gt_sign() -> char {
-    62 as char
 }
 
 #[cfg(test)]

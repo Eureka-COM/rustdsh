@@ -109,12 +109,26 @@ export async function startDashboard(options) {
   let updateQueue = Promise.resolve();
   let refreshPromise = null;
   let closing = false;
-  const allowedOrigins = () =>
-    new Set([
-      localUrl.slice(0, -1),
-      `http://localhost:${port}`,
-      ...(share.url ? [new URL(share.url).origin] : []),
-    ]);
+  // Parsed once per share change; the old code rebuilt the Set and parsed
+  // the share URL on every request (twice per request via trusted()).
+  let originsCache = null;
+  const allowedOrigins = () => {
+    if (!originsCache) {
+      originsCache = {
+        origins: new Set([
+          localUrl.slice(0, -1),
+          `http://localhost:${port}`,
+          ...(share.url ? [new URL(share.url).origin] : []),
+        ]),
+        hosts: new Set(
+          [localUrl.slice(0, -1), `http://localhost:${port}`].map(
+            (o) => new URL(o).host,
+          ),
+        ),
+      };
+    }
+    return originsCache;
+  };
   function browserAuthorized(req, url, route) {
     if (kind === "project")
       return equal(req.headers["x-rdsh-browser-token"], browserToken) ||
@@ -126,9 +140,10 @@ export async function startDashboard(options) {
   }
   function trusted(req) {
     const host = req.headers.host;
+    const allowed = allowedOrigins();
     return (
-      [...allowedOrigins()].some((origin) => new URL(origin).host === host) &&
-      (!req.headers.origin || allowedOrigins().has(req.headers.origin))
+      allowed.hosts.has(host) &&
+      (!req.headers.origin || allowed.origins.has(req.headers.origin))
     );
   }
   function browserUrl(base, root = false) {
@@ -139,7 +154,6 @@ export async function startDashboard(options) {
       for (const [key, value] of harness.url.searchParams)
         url.searchParams.set(key, value);
       url.hash = harness.url.hash;
-      url.searchParams.set("rdsh_dashboard_key", browserToken);
     }
     return url.href;
   }
@@ -185,6 +199,7 @@ export async function startDashboard(options) {
     if (refreshPromise) return refreshPromise;
     refreshPromise = (async () => {
       share = tailscale ? await enableShare(port) : share;
+      originsCache = null; // share.url changed; reparsed on next request
       await persistRuntime();
       return share;
     })();
