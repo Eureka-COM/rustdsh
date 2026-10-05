@@ -1,9 +1,11 @@
-//! `rdsh serve`: std-only local dashboard (127.0.0.1 only, no extra deps).
+//! `rdsh serve`: bounded local dashboard (127.0.0.1 only).
 //! Serves the embedded UI plus a tiny JSON API. Read-only operations only:
 //! no boot, no file writes, no command execution from HTTP.
 
 const UI: &str = include_str!("ui.html");
 const ICON: &str = include_str!("../assets/icon.svg");
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
     let addr = format!("127.0.0.1:{port}");
@@ -12,12 +14,28 @@ pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
             "cannot listen on {addr}: {e} (dsh web GUI also uses 3080; try --port 38080)"
         )
     })?;
-    eprintln!("[rdsh] dashboard: http://{addr}/  (Ctrl-C to stop, localhost only)");
+    let port = listener.local_addr()?.port();
+    let token = Arc::new(crate::local_http::random_token()?);
+    eprintln!(
+        "[rdsh] dashboard: http://127.0.0.1:{port}/#key={token}  (Ctrl-C to stop, localhost only)"
+    );
+    let connections = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         match stream {
-            Ok(s) => {
+            Ok(mut s) => {
+                let Some(slot) = crate::local_http::ConnectionSlot::acquire(&connections) else {
+                    let _ = crate::local_http::respond(
+                        &mut s,
+                        503,
+                        "application/json",
+                        "{\"error\":\"busy\"}",
+                    );
+                    continue;
+                };
+                let token = token.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(s) {
+                    let _slot = slot;
+                    if let Err(e) = handle(s, &token, port) {
                         eprintln!("[rdsh serve] {e:#}");
                     }
                 });
@@ -28,31 +46,46 @@ pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
+fn handle(mut s: std::net::TcpStream, token: &str, port: u16) -> anyhow::Result<()> {
     use std::borrow::Cow;
-    use std::io::{Read, Write};
     s.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
-    // Stack buffer: no heap alloc/zero per connection. Single-read
-    // semantics preserved (same 64KB ceiling as before).
-    let mut buf = [0u8; 65536];
-    let n = s.read(&mut buf)?;
-    // Borrow when valid UTF-8 (the common case) instead of copying.
-    let req_cow = String::from_utf8_lossy(&buf[..n]);
-    let req: &str = &req_cow;
-    let mut lines = req.lines();
-    let head = lines.next().unwrap_or("");
-    let mut parts = head.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let target = parts.next().unwrap_or("/");
+    let req = match crate::local_http::read_request(&mut s) {
+        Ok(req) => req,
+        Err(status) => {
+            crate::local_http::respond(
+                &mut s,
+                status,
+                "application/json",
+                "{\"error\":\"invalid request\"}",
+            )?;
+            return Ok(());
+        }
+    };
+    if !req.trusted(port) {
+        crate::local_http::respond(
+            &mut s,
+            403,
+            "application/json",
+            "{\"error\":\"untrusted host or origin\"}",
+        )?;
+        return Ok(());
+    }
+    let method = req.method.as_str();
+    let target = req.target.as_str();
     let (path, query) = match target.find('?') {
         Some(i) => (&target[..i], &target[i + 1..]),
         None => (target, ""),
     };
-    // Borrow the body slice instead of cloning it.
-    let body: &str = match req.find("\r\n\r\n") {
-        Some(i) => &req[i + 4..],
-        None => "",
-    };
+    if path.starts_with("/api/") && path != "/api/version" && !req.authorized(token) {
+        crate::local_http::respond(
+            &mut s,
+            401,
+            "application/json",
+            "{\"error\":\"unauthorized\"}",
+        )?;
+        return Ok(());
+    }
+    let body = req.body.as_str();
     // Static payloads are byte-identical to the old serde_json output
     // (serde_json sorts object keys; single-key or pre-sorted here).
     const VERSION_JSON: &str = concat!(
@@ -120,15 +153,7 @@ fn handle(mut s: std::net::TcpStream) -> anyhow::Result<()> {
         ),
         _ => (404, "application/json", Cow::Borrowed(NOT_FOUND_JSON)),
     };
-    let status_text = match status {
-        200 => "OK",
-        404 => "Not Found",
-        _ => "Error",
-    };
-    let head = format!("HTTP/1.1 {status} {status_text}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", payload.len());
-    s.write_all(head.as_bytes())?;
-    s.write_all(payload.as_bytes())?;
-    s.flush()?;
+    crate::local_http::respond(&mut s, status, ctype, &payload)?;
     Ok(())
 }
 
@@ -152,6 +177,8 @@ fn doctor_json() -> String {
 }
 
 fn bench_json(query: &str) -> String {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, String>>> = OnceLock::new();
     let n: u32 = query
         .split('&')
         .find_map(|kv| {
@@ -163,6 +190,13 @@ fn bench_json(query: &str) -> String {
         })
         .unwrap_or(3)
         .clamp(1, 5);
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(result) = cache.get(&n) {
+        return result.clone();
+    }
     let me = std::env::current_exe().ok();
     let mut mine = vec![];
     if let Some(exe) = me {
@@ -179,5 +213,7 @@ fn bench_json(query: &str) -> String {
             mine.push(t.elapsed().as_secs_f64() * 1000.0);
         }
     }
-    serde_json::json!({"rdsh_version_ms": mine, "n": n}).to_string()
+    let result = serde_json::json!({"rdsh_version_ms": mine, "n": n}).to_string();
+    cache.insert(n, result.clone());
+    result
 }

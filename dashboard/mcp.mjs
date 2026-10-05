@@ -200,7 +200,7 @@ export async function runStdio(project) {
     const response = await fetch(`${runtime.local_url}${route}`, {
       method: input ? "POST" : "GET",
       headers: {
-        authorization: `Bearer ${runtime.token}`,
+        authorization: `Bearer ${runtime.mcp_token}`,
         "content-type": "application/json",
       },
       body: input ? JSON.stringify(input) : undefined,

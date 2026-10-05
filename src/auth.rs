@@ -450,6 +450,15 @@ fn quote(s: &str) -> String {
     }
 }
 
+fn safe_scalar(s: &str) -> anyhow::Result<()> {
+    if s.chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        anyhow::bail!("credential value contains a line or control character");
+    }
+    Ok(())
+}
+
 fn grant_block(key: &str, g: &OauthGrant) -> Vec<String> {
     let mut b = vec![
         format!("  {key}:"),
@@ -531,17 +540,30 @@ fn splice_entry(text: &str, section: &str, key: &str, block: &[String]) -> Optio
 }
 
 fn write_creds(path: &str, text: &str) -> anyhow::Result<()> {
+    use std::io::Write;
     if let Some(parent) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = format!("{path}.tmp.{}", std::process::id());
-    std::fs::write(&tmp, text)?;
+    let tmp = format!("{path}.tmp.{}", crate::local_http::random_token()?);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    std::fs::rename(&tmp, path)?;
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = options.open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -688,6 +710,11 @@ fn apply_imports(quiet: bool) -> anyhow::Result<Vec<String>> {
     let mut done = Vec::new();
     for d in decisions.iter().filter(|d| d.action != "ok") {
         if let Some(g) = &d.grant {
+            safe_scalar(&g.access)?;
+            safe_scalar(&g.refresh)?;
+            if let Some(account) = &g.account_id {
+                safe_scalar(account)?;
+            }
             let key = format!("{RECORD_SCOPE}/{}", d.provider);
             match splice_entry(&text, "records", &key, &grant_block(&key, g)) {
                 Some(t) => {
@@ -706,6 +733,7 @@ fn apply_imports(quiet: bool) -> anyhow::Result<Vec<String>> {
         if doc.refs.contains_key(&k.name) {
             continue;
         }
+        safe_scalar(&k.value)?;
         let block = vec![format!("  {}: {}", k.name, quote(&k.value))];
         match splice_entry(&text, "refs", &k.name, &block) {
             Some(t) => {
@@ -963,6 +991,7 @@ fn prompt_yes(prompt: &str) -> bool {
 /// Store one `refs:` entry (0600, other entries untouched). Returns true
 /// when the file changed.
 fn store_ref(name: &str, value: &str) -> anyhow::Result<bool> {
+    safe_scalar(value)?;
     let path = creds_path();
     let doc = load_doc(&path);
     if !doc.text.is_empty() && !doc.version_ok {
@@ -1391,6 +1420,7 @@ pub(crate) fn setup_store_key(name: &str, value: &str) -> anyhow::Result<bool> {
     if !SETUP_KEY_ALLOWLIST.contains(&name) {
         anyhow::bail!("refusing to store unknown credential {name}");
     }
+    safe_scalar(value)?;
     let v = value.trim();
     if v.is_empty() || v.len() > 512 {
         anyhow::bail!("empty or oversized value");
@@ -1499,6 +1529,33 @@ mod tests {
             expires: Some(300),
         };
         assert!(!fresher_than(&src, &newer, 20));
+    }
+
+    #[test]
+    fn credential_scalars_cannot_create_new_yaml_lines() {
+        assert!(safe_scalar("valid-key-123").is_ok());
+        assert!(safe_scalar("key\nrefs:\n  OTHER: injected").is_err());
+        assert!(safe_scalar("key\rrecords:").is_err());
+        assert!(safe_scalar("key\u{2028}records:").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_file_is_private_when_created() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "rdsh-auth-test-{}",
+            crate::local_http::random_token().unwrap()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join(".credentials.yaml");
+        write_creds(path.to_str().unwrap(), "version: 1\n").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 
     #[test]

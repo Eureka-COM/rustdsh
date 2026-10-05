@@ -147,7 +147,7 @@ try {
         stdio: "inherit",
         env: {
           ...process.env,
-          RDSH_DASHBOARD_AUTHORIZATION: `Bearer ${runtime.token}`,
+          RDSH_DASHBOARD_AUTHORIZATION: `Bearer ${runtime.mcp_token}`,
         },
       },
     );

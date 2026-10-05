@@ -12,6 +12,13 @@ The QR code includes the access key and opens the correct authenticated page.
 Treat it as a credential; share it only with intended users on your tailnet.
 Keep Tailscale connected on the PC and phone and keep the dashboard running.
 
+Project 画面の QR 鍵はブラウザー専用です。画面は鍵を URL fragment から
+そのタブの sessionStorage に保存し、API へヘッダーで送ります。MCP 設定の鍵と
+管理用の鍵は別々で、MCP 鍵から人間の回答は登録できません。Harness は元の Web
+画面との互換性のため Cookie を使いますが、その鍵で MCP や管理 API は使えず、
+中継時には Harness 側へ渡しません。同じホスト上の別ポートにも Harness Cookie
+が届くため、そのホスト上で信頼できない Web サービスを開かないでください。
+
 This optional Node.js component is separate from the Rust launcher's `rdsh serve`
 status page. It does not replace the original Harness agent loop.
 
@@ -78,6 +85,8 @@ appropriate configuration into your agent's MCP settings. The dashboard must be
 running before the stdio bridge is used. The stdio bridge reads the current
 runtime credential on each operation. HTTP clients must reload the generated
 configuration after a restart, because the bearer key rotates.
+`runtime.json` の `token` は管理用、`mcp_token` は MCP 用です。ブラウザー用の
+鍵は `browser_url` に含まれます。これらを別用途で使い回さないでください。
 
 | Tool                       | Effect                                       |
 | -------------------------- | -------------------------------------------- |

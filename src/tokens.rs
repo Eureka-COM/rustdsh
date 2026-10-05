@@ -87,21 +87,48 @@ fn prune_with_total(s: &str, max_tokens: usize, total: usize) -> String {
     if total <= max_tokens {
         return s.to_string();
     }
-    let target_chars = max_tokens.saturating_mul(4).max(256);
-    let head_chars = target_chars * 2 / 3;
-    let tail_chars = target_chars - head_chars;
-    // Slice at char boundaries instead of collecting chars (the old code
-    // built a Vec<char> for the tail). Same head/tail chars, no middleman.
-    let head = &s[..head_byte_end(s, head_chars)];
-    let tail = if tail_chars == 0 {
-        ""
-    } else {
-        &s[tail_byte_start(s, tail_chars)..]
+    if max_tokens == 0 {
+        return String::new();
+    }
+    let chars = s.chars().count();
+    let marker = format!("\n\n...[rdsh pruned {total}->{max_tokens} tokens]...\n\n");
+    if estimate_tokens(&marker) >= max_tokens {
+        // A tiny budget cannot fit the marker. Preserve as much of the head
+        // as the estimator permits instead of returning an over-budget label.
+        let mut low = 0;
+        let mut high = chars.min(max_tokens.saturating_mul(4));
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            if estimate_tokens(&s[..head_byte_end(s, mid)]) <= max_tokens {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        return s[..head_byte_end(s, low)].to_string();
+    }
+    let candidate = |keep: usize| {
+        let head_chars = keep * 2 / 3;
+        let tail_chars = keep - head_chars;
+        let head = &s[..head_byte_end(s, head_chars)];
+        let tail = if tail_chars == 0 {
+            ""
+        } else {
+            &s[tail_byte_start(s, tail_chars)..]
+        };
+        format!("{head}{marker}{tail}")
     };
-    format!(
-        "{head}\n\n...[rdsh pruned {}->{} tokens]...\n\n{tail}",
-        total, max_tokens
-    )
+    let mut low = 0;
+    let mut high = chars.saturating_sub(1).min(max_tokens.saturating_mul(4));
+    while low < high {
+        let mid = low + (high - low).div_ceil(2);
+        if estimate_tokens(&candidate(mid)) <= max_tokens {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    candidate(low)
 }
 
 fn read_stdin() -> anyhow::Result<String> {
@@ -164,7 +191,7 @@ pub fn cmd_prune(max_tokens: usize, file: Option<String>) -> anyhow::Result<()> 
     let after = estimate_tokens(&pruned);
     eprintln!("[rdsh] tokens {before} -> {after} (budget {max_tokens})");
     let mut out = stdout_writer();
-    writeln!(out, "{pruned}")?;
+    write!(out, "{pruned}")?;
     out.flush()?;
     Ok(())
 }
@@ -201,6 +228,16 @@ mod tests {
         let s: String = "x".repeat(20000);
         let p = prune_to_budget(&s, 100);
         assert!(p.contains("rdsh pruned"));
-        assert!(estimate_tokens(&p) <= 200);
+        assert!(estimate_tokens(&p) <= 100);
+    }
+
+    #[test]
+    fn prune_respects_small_and_unicode_budgets() {
+        for source in ["abcdef".repeat(1000), "日本語abc".repeat(1000)] {
+            for budget in [0, 1, 2, 4, 8, 16, 32, 100] {
+                let result = prune_to_budget(&source, budget);
+                assert!(estimate_tokens(&result) <= budget, "budget {budget}");
+            }
+        }
     }
 }

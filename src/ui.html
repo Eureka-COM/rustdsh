@@ -51,8 +51,11 @@ footer { padding: 0 24px 24px; color: var(--mut); font-size: 12px; }
 </main>
 <footer>rdsh は本家dshを壊さない安全なRustランチャーです。serveは127.0.0.1のみで待ち受けます。</footer>
 <script>
-async function jget(p){ const r = await fetch(p); return r.json(); }
-async function jpost(p, b){ const r = await fetch(p, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(b)}); return r.json(); }
+const dashboardToken = new URLSearchParams(location.hash.slice(1)).get("key") || sessionStorage.getItem("rdsh_dashboard_token") || "";
+if (dashboardToken) sessionStorage.setItem("rdsh_dashboard_token", dashboardToken);
+history.replaceState(null, "", location.pathname);
+async function jget(p){ const r = await fetch(p, {headers:{"X-RDSH-Token":dashboardToken}}); return r.json(); }
+async function jpost(p, b){ const r = await fetch(p, {method:"POST", headers:{"Content-Type":"application/json","X-RDSH-Token":dashboardToken}, body: JSON.stringify(b)}); return r.json(); }
 (async () => { try { const v = await jget("/api/version"); document.getElementById("ver").textContent = v.name + " " + v.version; } catch(e){} })();
 async function doctor(){ const d = await jget("/api/doctor"); document.getElementById("doctor").textContent = JSON.stringify(d, null, 2); }
 async function tokens(){ const t = document.getElementById("ttext").value; const r = await jpost("/api/tokens", {text: t}); document.getElementById("tout").textContent = "tokens: " + r.tokens + " / chars: " + r.chars; }

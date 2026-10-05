@@ -100,18 +100,27 @@ fn decode_entities(s: &str) -> String {
         .replace("&quot;", &DQ.to_string())
         .replace("&#39;", "'")
         .replace("&#x27;", "'");
-    while let Some(i) = out.find("&#") {
+    let mut search = 0;
+    while let Some(offset) = out[search..].find("&#") {
+        let i = search + offset;
         let rest = &out[i + 2..];
-        let end = rest.find(';').unwrap_or(rest.len());
+        let Some(end) = rest.find(';') else {
+            break;
+        };
         let num = &rest[..end];
-        let ch = if let Some(hex) = num.strip_prefix('x').or_else(|| num.strip_prefix('X')) {
+        let ch = if num.len() > 8 || num.contains('&') {
+            None
+        } else if let Some(hex) = num.strip_prefix('x').or_else(|| num.strip_prefix('X')) {
             u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
         } else {
             num.parse::<u32>().ok().and_then(char::from_u32)
         };
         match ch {
-            Some(c) => out.replace_range(i..i + 2 + end + 1, &c.to_string()),
-            None => break,
+            Some(c) => {
+                out.replace_range(i..i + 2 + end + 1, &c.to_string());
+                search = i + c.len_utf8();
+            }
+            None => search = i + 2,
         }
     }
     out
@@ -239,13 +248,28 @@ fn fetch(base: &str, query: &str) -> anyhow::Result<Vec<Hit>> {
             "cannot reach SearXNG at {base} ({e}); is it running? SEARXNG_URL overrides"
         )
     })?;
-    s.set_read_timeout(Some(std::time::Duration::from_secs(15)))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let ua = format!("rdsh/{}", env!("CARGO_PKG_VERSION"));
     s.write_all(
         format!("GET {target} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: text/html\r\nConnection: close\r\n\r\n").as_bytes(),
     )?;
     let mut raw = Vec::new();
-    s.read_to_end(&mut raw)?;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("SearXNG response timed out");
+        }
+        s.set_read_timeout(Some(remaining))?;
+        let n = s.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        if raw.len().saturating_add(n) > 2 * 1024 * 1024 {
+            anyhow::bail!("SearXNG response too large");
+        }
+        raw.extend_from_slice(&chunk[..n]);
+    }
     let text = String::from_utf8_lossy(&raw);
     let body = match text.find("\r\n\r\n") {
         Some(i) => &text[i + 4..],
@@ -327,5 +351,12 @@ mod tests {
         assert_eq!(hits[0].title, "A B");
         assert_eq!(hits[0].url, "https://e.com/x?a=1&b=2");
         assert_eq!(hits[0].content, "one <two>");
+    }
+
+    #[test]
+    fn malformed_numeric_entity_does_not_panic_or_hide_later_entities() {
+        assert_eq!(decode_entities("A&#65"), "A&#65");
+        assert_eq!(decode_entities("A&#65;B"), "AAB");
+        assert_eq!(decode_entities("bad &#xZ; then &#65;"), "bad &#xZ; then A");
     }
 }
