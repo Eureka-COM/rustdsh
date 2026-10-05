@@ -18,6 +18,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bin: rdsh
             pkg: rdsh-linux-x64.tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin: rdsh
+            pkg: rdsh-linux-x64-musl.tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
             bin: rdsh
@@ -36,6 +40,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --target ${{ matrix.target }}
       - if: runner.os != 'Windows'
         run: tar -czf ${{ matrix.pkg }} -C target/${{ matrix.target }}/release ${{ matrix.bin }}
@@ -44,9 +50,9 @@ jobs:
         run: Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin }}" -DestinationPath ${{ matrix.pkg }}
       # Ship the installers alongside the binaries so releases are one-liners:
       #   curl -fsSL .../releases/latest/download/install.sh | bash -s -- --from-release
-      # Installers go up from the Linux job only: same filenames from every
+      # Installers go up from the gnu Linux job only: same filenames from every
       # matrix job race on delete+re-upload, and Windows checkouts use CRLF.
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -54,7 +60,7 @@ jobs:
             install.sh
             install.ps1
           generate_release_notes: true
-      - if: runner.os != 'Linux'
+      - if: runner.os != 'Linux' || matrix.target != 'x86_64-unknown-linux-gnu'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.pkg }}

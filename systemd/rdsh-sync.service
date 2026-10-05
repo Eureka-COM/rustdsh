@@ -3,4 +3,8 @@ Description=rdsh dsh auto-update (check upstream, update, verify, roll back)
 
 [Service]
 Type=oneshot
+# Low-spec hosts (issue #85 item 5): never steal the machine during auto-update.
+Nice=19
+IOSchedulingClass=idle
+CPUWeight=10
 ExecStart=%h/File/Prog/rustdsh/sync-dsh.sh

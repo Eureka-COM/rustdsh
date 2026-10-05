@@ -9,6 +9,7 @@ MODE="rdsh"
 NO_RUSTUP=0
 FROM_RELEASE=0
 VER="latest"
+USE_MUSL="${RDSH_MUSL:-0}"
 for a in "$@"; do
   case "$a" in
     --as-dsh) MODE="as-dsh" ;;
@@ -16,14 +17,16 @@ for a in "$@"; do
     --prefix=*) PREFIX="${a#--prefix=}" ;;
     --no-rustup) NO_RUSTUP=1 ;;
     --from-release) FROM_RELEASE=1 ;;
+    --musl) USE_MUSL=1 ;;
     --version=*) VER="${a#--version=}" ;;
     -h|--help)
-      echo "usage: ./install.sh [--as-dsh] [--restore] [--prefix=DIR] [--no-rustup] [--from-release] [--version=VER]"
+      echo "usage: ./install.sh [--as-dsh] [--restore] [--prefix=DIR] [--no-rustup] [--from-release] [--musl] [--version=VER]"
       echo "  (default)  build + install rdsh to PREFIX/rdsh (Linux, macOS, WSL)"
       echo "  --as-dsh   also install rdsh as PREFIX/dsh (backs up original to PREFIX/dsh-orig)"
       echo "  --restore  restore PREFIX/dsh from PREFIX/dsh-orig"
       echo "  --no-rustup  do not auto-install Rust when cargo is missing"
       echo "  --from-release  install a prebuilt binary from GitHub Releases (no Rust needed)"
+      echo "  --musl  use the static musl build (rdsh-linux-x64-musl.tar.gz; also via RDSH_MUSL=1)"
       echo "  --version=VER  release to fetch with --from-release (default: latest)"
       echo "  native Windows: use install.ps1 instead (it can also side-install into WSL via -Wsl)"
       exit 0 ;;
@@ -48,12 +51,39 @@ if [ "$MODE" = restore ]; then
   fi
   exit 0
 fi
+glibc_version() {
+  # Print glibc X.Y (e.g. 2.41) or empty when undetectable (musl, macOS, ...).
+  v="$(ldd --version 2>/dev/null | head -n 1 | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | tail -n 1)"
+  if [ -z "$v" ]; then v="$(getconf GNU_LIBC_VERSION 2>/dev/null | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | tail -n 1)"; fi
+  printf "%s" "$v"
+}
+ver_lt() {
+  # ver_lt A B: true when dotted version A < B.
+  awk -v a="$1" -v b="$2" 'BEGIN { n=split(a,aa,"."); m=split(b,bb,"."); k=(n>m?n:m); for(i=1;i<=k;i++){x=(aa[i]==""?0:aa[i]); y=(bb[i]==""?0:bb[i]); if(x<y) exit 0; if(x>y) exit 1;} exit 1; }'
+}
+want_musl() {
+  # Explicit --musl / RDSH_MUSL=1 wins; otherwise auto-select musl on old glibc.
+  if [ "${USE_MUSL:-0}" = 1 ]; then return 0; fi
+  if [ "$OS/$ARCH" = "Linux/x86_64" ]; then
+    gv="$(glibc_version)"
+    if [ -n "$gv" ] && ver_lt "$gv" "2.34"; then return 0; fi
+  fi
+  return 1
+}
 fetch_release() {
   # Print the path of the extracted prebuilt rdsh binary.
   # Overridable for tests: RDSH_RELEASE_BASE=file:///path/to/dir.
   base="${RDSH_RELEASE_BASE:-https://github.com/sahenjp/rustdsh/releases}"
   case "$OS/$ARCH" in
-    Linux/x86_64) asset="rdsh-linux-x64.tar.gz" ;;
+    Linux/x86_64)
+      if want_musl; then asset="rdsh-linux-x64-musl.tar.gz"; else asset="rdsh-linux-x64.tar.gz"; fi
+      if [ "${USE_MUSL:-0}" != 1 ]; then
+        gv="$(glibc_version)"
+        if [ -n "$gv" ] && ver_lt "$gv" "2.34"; then echo "glibc $gv < 2.34: selecting static musl build" >&2; fi
+      else
+        echo "selecting static musl build (--musl / RDSH_MUSL=1)" >&2
+      fi
+      ;;
     Darwin/arm64) asset="rdsh-macos-arm64.tar.gz" ;;
     Darwin/x86_64) asset="rdsh-macos-x64.tar.gz" ;;
     *) echo "no prebuilt binary for $OS/$ARCH (build from source instead)" >&2; exit 1 ;;
