@@ -83,4 +83,15 @@ assert legacy["goal"] == "旧ファイルのgoal"
 assert legacy["enable_verifier"] is False
 '
 
+# CLI wiring (Lead integration): sandboxed, never touches real ~/.dsh.
+BIN="${BIN:-./target/debug/rdsh}"
+if [ -x "$BIN" ]; then
+  CSB="$(mktemp -d 2>/dev/null || mktemp -d -t rdsh-settings-cli)"
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings init >/tmp/st-out 2>/tmp/st-err && grep -q "rdsh.json" /tmp/st-out; then ok "settings init"; else echo "FAIL: settings init"; cat /tmp/st-err; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings show --json 2>/dev/null | grep -q '"schema"'; then ok "settings show"; else echo "FAIL: settings show"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings path 2>/dev/null | grep -q "rdsh.json"; then ok "settings path"; else echo "FAIL: settings path"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings init >/dev/null 2>&1; then echo "FAIL: second init should exit nonzero"; exit 1; else ok "settings init guards overwrite"; fi
+  rm -rf "$CSB"
+fi
+
 echo "settings-prototype: ALL PASS ($pass)"

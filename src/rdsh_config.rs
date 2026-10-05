@@ -76,7 +76,7 @@ pub struct ServeSection {
     pub port: u16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct GuardSection {
     pub deny: Vec<String>,
     pub reason: String,
@@ -87,7 +87,7 @@ pub struct BenchSection {
     pub n: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SetupSection {
     /// 0 = ランダムポート。
     pub web_port: u16,
@@ -116,19 +116,31 @@ pub struct ContextSection {
 
 impl Default for GeneralSection {
     fn default() -> Self {
-        Self { slim: true, passthrough: false, dry_run: false, default_profile: String::new() }
+        Self {
+            slim: true,
+            passthrough: false,
+            dry_run: false,
+            default_profile: String::new(),
+        }
     }
 }
 
 impl Default for TokensSection {
     fn default() -> Self {
-        Self { default_budget: 4000 }
+        Self {
+            default_budget: 4000,
+        }
     }
 }
 
 impl Default for SearchSection {
     fn default() -> Self {
-        Self { dir: ".".to_string(), max: 100, web_limit: 10, searxng_url: String::new() }
+        Self {
+            dir: ".".to_string(),
+            max: 100,
+            web_limit: 10,
+            searxng_url: String::new(),
+        }
     }
 }
 
@@ -140,7 +152,10 @@ impl Default for CompactSection {
 
 impl Default for SessionsSection {
     fn default() -> Self {
-        Self { limit: 20, with_tokens: false }
+        Self {
+            limit: 20,
+            with_tokens: false,
+        }
     }
 }
 
@@ -156,27 +171,17 @@ impl Default for ServeSection {
     }
 }
 
-impl Default for GuardSection {
-    fn default() -> Self {
-        Self { deny: vec![], reason: String::new() }
-    }
-}
-
 impl Default for BenchSection {
     fn default() -> Self {
         Self { n: 5 }
     }
 }
 
-impl Default for SetupSection {
-    fn default() -> Self {
-        Self { web_port: 0 }
-    }
-}
-
 impl Default for BetaSection {
     fn default() -> Self {
-        Self { context_engine: true }
+        Self {
+            context_engine: true,
+        }
     }
 }
 
@@ -230,8 +235,7 @@ pub fn settings_path() -> String {
 /// context 節が空なら旧 rdsh-context.json で補完する（読み取り専用）。
 pub fn load() -> RdshSettings {
     let raw = std::fs::read_to_string(settings_path()).unwrap_or_default();
-    let parsed: serde_json::Value =
-        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
     let has_context = parsed.get("context").is_some_and(|c| !c.is_null());
     let mut cfg = if parsed.is_null() {
         RdshSettings::default()
@@ -305,7 +309,11 @@ impl RdshSettings {
             search: SearchSection {
                 dir: {
                     let d = text(&s, "dir", PATH_CHARS);
-                    if d.trim().is_empty() { ".".to_string() } else { d }
+                    if d.trim().is_empty() {
+                        ".".to_string()
+                    } else {
+                        d
+                    }
                 },
                 max: clamp_u64(num(&s, "max"), 100, 1, 100) as usize,
                 web_limit: clamp_u64(num(&s, "web_limit"), 10, 1, 100) as usize,
@@ -351,7 +359,11 @@ impl RdshSettings {
                 constraints: list(&cx, "constraints", TEXT_CHARS),
                 working_files: {
                     let w = list(&cx, "working_files", PATH_CHARS);
-                    if w.is_empty() { list(&cx, "files", PATH_CHARS) } else { w }
+                    if w.is_empty() {
+                        list(&cx, "files", PATH_CHARS)
+                    } else {
+                        w
+                    }
                 },
                 open_tasks: list(&cx, "open_tasks", TEXT_CHARS),
                 max_code_hits: clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize,
@@ -371,26 +383,36 @@ impl RdshSettings {
 
     /// sanitize の再帰を避ける素朴な正規化。
     fn from_value_raw(v: &serde_json::Value) -> Self {
-        let mut out = Self::default();
-        out.schema = SCHEMA_VERSION;
+        let mut out = Self {
+            schema: SCHEMA_VERSION,
+            ..Self::default()
+        };
         let g = v.get("general").cloned().unwrap_or(serde_json::Value::Null);
         out.general.slim = flag(&g, "slim", true);
         out.general.passthrough = flag(&g, "passthrough", false);
         out.general.dry_run = flag(&g, "dry_run", false);
         out.general.default_profile = text(&g, "default_profile", PROFILE_CHARS);
         let t = v.get("tokens").cloned().unwrap_or(serde_json::Value::Null);
-        out.tokens.default_budget = clamp_u64(num(&t, "default_budget"), 4000, 500, 200000) as usize;
+        out.tokens.default_budget =
+            clamp_u64(num(&t, "default_budget"), 4000, 500, 200000) as usize;
         let s = v.get("search").cloned().unwrap_or(serde_json::Value::Null);
         out.search.dir = {
             let d = text(&s, "dir", PATH_CHARS);
-            if d.trim().is_empty() { ".".to_string() } else { d }
+            if d.trim().is_empty() {
+                ".".to_string()
+            } else {
+                d
+            }
         };
         out.search.max = clamp_u64(num(&s, "max"), 100, 1, 100) as usize;
         out.search.web_limit = clamp_u64(num(&s, "web_limit"), 10, 1, 100) as usize;
         out.search.searxng_url = text(&s, "searxng_url", URL_CHARS);
         let c = v.get("compact").cloned().unwrap_or(serde_json::Value::Null);
         out.compact.max_tokens = clamp_u64(num(&c, "max_tokens"), 8000, 500, 200000) as usize;
-        let ss = v.get("sessions").cloned().unwrap_or(serde_json::Value::Null);
+        let ss = v
+            .get("sessions")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         out.sessions.limit = clamp_u64(num(&ss, "limit"), 20, 1, 100) as usize;
         out.sessions.with_tokens = flag(&ss, "with_tokens", false);
         let l = v.get("logs").cloned().unwrap_or(serde_json::Value::Null);
@@ -420,7 +442,11 @@ impl RdshSettings {
         out.context.constraints = list(&cx, "constraints", TEXT_CHARS);
         out.context.working_files = {
             let w = list(&cx, "working_files", PATH_CHARS);
-            if w.is_empty() { list(&cx, "files", PATH_CHARS) } else { w }
+            if w.is_empty() {
+                list(&cx, "files", PATH_CHARS)
+            } else {
+                w
+            }
         };
         out.context.open_tasks = list(&cx, "open_tasks", TEXT_CHARS);
         out.context.max_code_hits = clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize;
@@ -429,7 +455,7 @@ impl RdshSettings {
         out
     }
 
-    fn to_value(&self) -> serde_json::Value {
+    pub fn to_value(&self) -> serde_json::Value {
         serde_json::json!({
             "schema": self.schema,
             "general": {
@@ -519,7 +545,11 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
     }
     if c.working_files.is_empty() {
         let w = list(&v, "working_files", PATH_CHARS);
-        c.working_files = if w.is_empty() { list(&v, "files", PATH_CHARS) } else { w };
+        c.working_files = if w.is_empty() {
+            list(&v, "files", PATH_CHARS)
+        } else {
+            w
+        };
     }
     if c.open_tasks.is_empty() {
         c.open_tasks = list(&v, "open_tasks", TEXT_CHARS);
@@ -686,8 +716,11 @@ mod rdsh_config_tests {
         with_home("webport", |_| {
             let p = settings_path();
             std::fs::create_dir_all(std::path::Path::new(&p).parent().unwrap()).unwrap();
-            std::fs::write(&p, serde_json::json!({ "setup": { "web_port": 0 } }).to_string())
-                .unwrap();
+            std::fs::write(
+                &p,
+                serde_json::json!({ "setup": { "web_port": 0 } }).to_string(),
+            )
+            .unwrap();
             assert_eq!(load().setup.web_port, 0);
         });
     }

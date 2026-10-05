@@ -7,6 +7,7 @@ mod guard;
 mod inspect;
 mod local_http;
 mod passthrough;
+mod rdsh_config;
 mod search;
 mod serve;
 mod setup_web;
@@ -160,6 +161,11 @@ enum Commands {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Unified rdsh settings (rdsh.json): show values, path, or write defaults
+    Settings {
+        #[command(subcommand)]
+        action: SettingsAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -193,6 +199,22 @@ enum ContextAction {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum SettingsAction {
+    /// Show current settings (rdsh.json with legacy fallback)
+    Show {
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Print the settings file path
+    Path,
+    /// Write defaults to the settings file (use --force to overwrite)
+    Init {
+        #[arg(long = "force")]
+        force: bool,
+    },
+}
+
 /// First-arg subcommands owned by rdsh. When installed as `dsh`, anything else
 /// is delegated verbatim to the original binary (so `dsh --profile tui`,
 /// `dsh --version`, `dsh --help` stay byte-identical).
@@ -217,6 +239,7 @@ const NATIVE_FIRST: &[&str] = &[
     "setup",
     "search-web",
     "context",
+    "settings",
 ];
 
 fn invoked_as_dsh() -> bool {
@@ -271,6 +294,50 @@ fn main() {
         Some(Commands::Serve { port }) => serve::cmd_serve(port),
         Some(Commands::Bench { n }) => bench(n),
         Some(Commands::Guard { deny, reason, json }) => guard::cmd_guard(deny, reason, json),
+        Some(Commands::Settings { action }) => match action {
+            SettingsAction::Path => {
+                println!("{}", rdsh_config::settings_path());
+                Ok(())
+            }
+            SettingsAction::Show { json } => {
+                let cfg = rdsh_config::load();
+                let v = cfg.to_value();
+                if json {
+                    match serde_json::to_string_pretty(&v) {
+                        Ok(text) => {
+                            println!("{text}");
+                            Ok(())
+                        }
+                        Err(e) => Err(anyhow::anyhow!(e)),
+                    }
+                } else {
+                    println!("config: {}", rdsh_config::settings_path());
+                    match v.as_object() {
+                        Some(map) => {
+                            for k in map.keys() {
+                                println!("- {k}");
+                            }
+                            Ok(())
+                        }
+                        None => Err(anyhow::anyhow!("settings did not render as an object")),
+                    }
+                }
+            }
+            SettingsAction::Init { force } => {
+                let path = rdsh_config::settings_path();
+                if std::path::Path::new(&path).exists() && !force {
+                    eprintln!("[rdsh] settings already exist at {path} (use --force to overwrite)");
+                    std::process::exit(2);
+                }
+                match rdsh_config::RdshSettings::default().save() {
+                    Ok(()) => {
+                        println!("{path}");
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        },
         Some(Commands::Context { action }) => match action {
             ContextAction::Build {
                 query,
