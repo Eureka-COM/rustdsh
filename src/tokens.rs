@@ -1,7 +1,14 @@
 use std::io::{Read, Write};
 
-/// Heuristic token estimator: ~4 chars/token for mixed text.
-/// CJK chars count ~1 token each. O(n), std-only.
+/// Heuristic token estimator: ASCII runs count `ceil(len / 4)` tokens,
+/// non-ASCII scalars (e.g. CJK) count 1 token each. O(n), std-only.
+///
+/// Budget context (estimation only, no enforcement here):
+/// - #80 inline type-declaration budgets compare against this estimate.
+/// - #81 small-state snapshots use it to check size limits.
+/// - #82 classifier fan-out sums per-call estimates via this function.
+///
+/// Formula is frozen; keep doc/test-only changes in this area.
 pub fn estimate_tokens(s: &str) -> usize {
     if s.is_ascii() {
         return s.len().div_ceil(4);
@@ -77,7 +84,12 @@ fn utf8_len(b: u8) -> usize {
     }
 }
 
-/// Keep head+tail within budget; middle replaced with marker.
+/// Keep head+tail within `max_tokens`; middle replaced with a marker.
+/// Budget guarantee: `estimate_tokens(result) <= max_tokens` always holds.
+/// Split is head-heavy (2/3 head, 1/3 tail); tiny budgets that cannot fit
+/// the marker degrade to a head-only prefix instead of going over budget.
+/// Callers (#80 tool catalogs, #81 state snapshots, #82 classifier batches)
+/// use this to size payloads before sending; formula unchanged.
 pub fn prune_to_budget(s: &str, max_tokens: usize) -> String {
     prune_with_total(s, max_tokens, estimate_tokens(s))
 }
@@ -239,5 +251,57 @@ mod tests {
                 assert!(estimate_tokens(&result) <= budget, "budget {budget}");
             }
         }
+    }
+
+    // #80: inline type-declaration budget — small catalog stays intact,
+    // oversized catalog prunes within budget (estimate-only check).
+    #[test]
+    fn inline_type_budget_for_tool_catalog() {
+        let small = r#"{"name":"search","input":{"q":"string"}}"#;
+        assert_eq!(prune_to_budget(small, 4000), small);
+        let big = r#"{"type":"object"}"#.repeat(2000);
+        let pruned = prune_to_budget(&big, 64);
+        assert!(estimate_tokens(&pruned) <= 64);
+        assert!(pruned.contains("rdsh pruned"));
+    }
+
+    // #81: small-state snapshot — tiny JSON under budget is byte-identical.
+    #[test]
+    fn small_state_snapshot_kept_verbatim() {
+        let state = r#"{"cursor":"abc123","hits":[1,2,3]}"#;
+        let budget = estimate_tokens(state) + 10;
+        assert_eq!(prune_to_budget(state, budget), state);
+    }
+
+    // #82: classifier fan-out — per-call estimates sum without overflow,
+    // pruned batch head still fits the shared budget.
+    #[test]
+    fn classifier_batch_fits_shared_budget() {
+        let choices = ["yes".to_string(), "no".to_string(), "はい".to_string()];
+        let total: usize = choices.iter().map(|c| estimate_tokens(c)).sum();
+        assert_eq!(total, 4); // 1 + 1 + 2 (CJK x2).
+        let joined = choices.join("\n").repeat(500);
+        let pruned = prune_to_budget(&joined, 48);
+        assert!(estimate_tokens(&pruned) <= 48);
+    }
+
+    // CJK rule pin: each non-ASCII scalar counts 1 token.
+    #[test]
+    fn cjk_chars_count_one_each() {
+        assert_eq!(estimate_tokens("あ"), 1);
+        assert_eq!(estimate_tokens("日本語"), 3);
+        // Mixed ASCII run + CJK: ceil(3/4)=1 plus 2 CJK = 3.
+        assert_eq!(estimate_tokens("abc日本"), 3);
+    }
+
+    // Pruned output keeps head and tail order around the marker.
+    #[test]
+    fn prune_keeps_head_and_tail_order() {
+        let s: String = (0..5000).map(|i| format!("L{i:04} ")).collect();
+        let p = prune_to_budget(&s, 50);
+        assert!(estimate_tokens(&p) <= 50);
+        let marker = p.find("rdsh pruned").expect("marker");
+        assert!(p[..marker].contains("L0000"));
+        assert!(p[marker..].contains("L4999"));
     }
 }
