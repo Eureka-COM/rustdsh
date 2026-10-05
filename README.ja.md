@@ -118,27 +118,71 @@ rdsh bench --n 5                   # rdsh/dsh の起動比較
 rdsh serve                         # Webダッシュボード（:3080）
 ```
 
-### OAuth自動認識（`rdsh auth`：入れるだけで認識）
+### 選択した認証情報だけを共有する（rdsh auth）
 
-他ツールで済ませたログインを、dsh本体が読む
-`$DSH_HOME/.credentials.yaml` へ自動で写します：
+Codex / OpenCode / 環境変数の認証情報を、秘密値なしで一覧にします。
+共有元とcredentialを選ぶまでコピーしません。取込先はDSH本来の
+$DSH_HOME/.credentials.yamlです。選択は秘密値を含まない
+$DSH_HOME/rdsh-auth-sharing.jsonに保存します。
 
-- Codex CLI（`~/.codex/auth.json`、ChatGPT OAuth）
-- opencode（`$XDG_DATA_HOME/opencode/auth.json`、`openai` OAuthは
-  `openai-codex` ルートになります）
+~~~sh
+rdsh auth                                      # 共有元・保存先・選択状態・解除手順
+rdsh auth --json                               # 秘密値を含まない機械可読の一覧
+rdsh --dry-run auth --select codex:openai-codex --import # previewのみ、ファイル変更なし
+rdsh auth --select codex:openai-codex --import    # CodexのOAuthだけ共有
+rdsh auth --select opencode:openai-codex --import # OpenCodeのopenaiログインだけ共有
+rdsh auth --select codex:OPENAI_API_KEY --import  # CodexのAPIキーは別に選択
+rdsh auth --select env:DEEPSEEK_API_KEY --import  # この環境変数だけ永続保存
+rdsh auth --unselect codex:openai-codex          # 将来の取込停止、既存コピーは保持
+rdsh setup                                    # 選択済みの同期と初回案内
+rdsh setup --web                              # 共有元・選択コマンド・個別キー保存
+~~~
 
-```sh
-rdsh auth            # 状態確認：見つかったログインと認識済みの一覧
-rdsh auth --import   # 不足・古い分だけ書込（0600、他エントリ不変）
-rdsh auth --json     # 機械可読の状態出力
-rdsh setup           # 初回ウィザード：取込、キー貼付、--login/--open
-rdsh setup --web     # フローティングのセットアップUI（localhost、ブラウザ自動表示）
-```
+--select / --unselectは必要なものだけ個別に繰り返せます。選択すると
+boot・dump-config・plugin・dsh名での委譲・setupでも、その共有元から
+同期します。--importはすぐに取り込みます。別CLIの未選択トークンが
+新しくても採用しません。DSH側の新しいgrantや既存API-key記録・ref、
+他のエントリ、コメント、改行形式は保持します。Unixの認証ファイルと
+選択ファイルは0600で保存します。
 
-起動時（`rdsh tui`・`dump-config`・`plugin`）は先に自動同期するので、
-Codex/opencode側でログインするだけで使えます。
-`RDSH_AUTH_AUTOSYNC=0` で無効化できます。dsh側で更新された新しい
-トークンは上書きせず、非grant記録（APIキー）にも触れません。
+対象はCodexの ~/.codex/auth.json、OpenCodeの
+$XDG_DATA_HOME/opencode/auth.json（未設定時はOSのdataディレクトリ）と
+旧 ~/.config/opencode/auth.jsonです。OpenCodeのopenaiログインはDSHの
+openai-codexへ写すので、選択名はopencode:openai-codexです。
+環境変数の保存対象はDEEPSEEK_API_KEY、OPENAI_API_KEY、ANTHROPIC_API_KEYです。
+一覧は形式・存在の確認であり、実際の認証成功を意味しません。
+
+すでに渡した環境変数は、DSHとその子プロセスに引き継がれます。
+この経路ではrdshはファイルを書かず、JSONにpersistent=false、
+共有先、停止・失効手順を表示します。保存するなら別途選択してください。
+setup --yesだけでは全環境キーを保存しません。対話setupやWeb画面での
+個別の保存は引き続き可能です。
+
+**利用範囲と解除:** 保存した内容は同じDSH_HOMEの全プロファイルで
+使えます。選択解除は将来のrdshによる取込を止め、保存済みコピーと
+実行中プロセスは残します。コピーの利用を止めるにはDSHを停止して
+認証ファイル内の該当record/refを削除します。credential自体の失効は
+providerでOAuth grantを取り消すかAPIキーを更新してください。
+共有元CLIも使えなくなる場合があります。rdshによるコピーの制御であり、
+DSH自身の更新・環境変数の継承・OS sandboxを制御するものではありません。
+
+**従来版からの移行:** 既存のDSH認証情報は残します。選択ファイルが
+なければ何も選択せず、従来のauth --importも選択を要求します。
+RDSH_AUTH_AUTOSYNC=1で全取込へ戻ることはありません。一覧とpreviewで
+確認して必要な共有元を選んでください。RDSH_AUTH_AUTOSYNC=0では
+選択を残して自動同期だけを止めます。明示したauth --importは実行できます。
+壊れた・読めない選択ファイルでは同期を停止します。
+
+選択変更とrdshの認証書込は共通lockで直列化し、解除完了後に古い選択で
+取り込むことを防ぎます。writerの異常終了でlockが残った場合は、
+rdsh auth/setupの書込が動いていないことを確認してから
+$DSH_HOME/.rdsh-auth-sharing.lockを除去してください。lock中は
+launcherが取込をスキップします。
+
+setup --webは毎回アクセス鍵を発行し、#key=...付きURLを表示します。
+読み取り・キー保存・終了に同じ鍵が必要です。URLを他人に共有しないでください。
+画面では保存前に保存先・利用範囲と、選択解除・コピー削除・provider失効の
+違いを確認できます。
 
 ### hooks.json での使い方（`rdsh guard`）
 
@@ -231,8 +275,8 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 
 ### 検証（すべて実行済み）
 
-- `cargo test`：26件通過（トークン計算・ワイルドカード・引数分割・auth系）
-- `tests/regress.sh`：35件通過（全サブコマンド・異常系・auth取込往復・setup初回導線・dsh名委譲の隔離検証）
+- `cargo test`：単体・隔離CLI統合テスト（トークン計算・ワイルドカード・引数分割・auth系）
+- `tests/regress.sh`：CLI回帰検査（全サブコマンド・異常系・auth取込往復・setup初回導線・dsh名委譲の隔離検証）
 - 高速化の前後で出力をdiff比較し、完全一致を確認（300件search・上限打ち切りsearch）
 - 実置換後に `dsh --version`（委譲）と `dsh guard`（新機能）を実機確認
 
@@ -247,7 +291,7 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 ## 構成
 
 - `src/main.rs` — CLI定義・振り分け・`dsh`名検出
-- `src/auth.rs` — OAuth自動認識（codex/opencode→credentials.yaml）
+- `src/auth.rs` — 認証一覧と選択した共有元だけの取込（codex/opencode/環境変数→credentials.yaml）
 - `src/dsh_args.rs` — 本家 `lib/bin.js` 互換の引数分割（読取専用）
 - `src/passthrough.rs` — 本家探索＋`exec`委譲
 - `src/slim.rs` — slim env定義
@@ -260,7 +304,7 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 - `src/serve.rs`＋`src/ui.html` — ローカルWeb UI
 - `src/setup_web.rs`＋`src/setup.html` — フローティングのセットアップUI（`setup --web`）
 - `install.sh` — 導入（`--as-dsh`置換／`--restore`復元）
-- `tests/regress.sh` — CLI回帰試験（35件）
+- `tests/regress.sh` — CLI回帰試験（CLI回帰検査）
 
 ## よくある質問
 

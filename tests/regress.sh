@@ -67,12 +67,14 @@ mkdir -p $WB/.local/bin
 printf '#!/bin/sh\nexec node "$(readlink -f "$(command -v dsh)")" --profile web\n' > $WB/.local/bin/dsh-web-local
 if HOME="$WB" $BIN doctor 2>/dev/null | grep -q "dsh-web-local"; then ok "doctor flags node-on-dsh wrapper"; else echo "FAIL(output): doctor flags node-on-dsh wrapper"; exit 1; fi
 rm -rf $WB
-AB=/tmp/rdsh-auth-AA
+AB="$RR_SANDBOX/auth"
 mkdir -p $AB/home/.codex $AB/home/.local/share/opencode $AB/dsh
 printf '%s' '{"tokens":{"access_token":"a","refresh_token":"r","account_id":"1"}}' > $AB/home/.codex/auth.json
 printf '%s' '{"openai":{"type":"oauth","refresh":"r2","access":"a2","expires":1991708802841,"accountId":"9"}}' > $AB/home/.local/share/opencode/auth.json
 if HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN auth 2>/dev/null | grep -q "openai-codex"; then ok "auth detects opencode login"; else echo "FAIL(output): auth detects opencode login"; exit 1; fi
-if HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN auth --import >/dev/null 2>&1 && grep -q "llm-pi-ai/openai-codex" "$AB/dsh/.credentials.yaml"; then ok "auth import writes record"; else echo "FAIL(output): auth import writes record"; exit 1; fi
+if HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN auth --import >/dev/null 2>&1; then echo "FAIL: auth import without selection"; exit 1; else ok "auth import requires selection"; fi
+if HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN --dry-run auth --select opencode:openai-codex --import --json > /tmp/rr-out 2>/dev/null && grep -q '"dry_run":true' /tmp/rr-out && [ ! -f "$AB/dsh/.credentials.yaml" ] && [ ! -f "$AB/dsh/rdsh-auth-sharing.json" ]; then ok "auth sharing preview writes nothing"; else echo "FAIL(output): auth sharing preview"; exit 1; fi
+if HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN auth --select opencode:openai-codex --import >/dev/null 2>&1 && grep -q "llm-pi-ai/openai-codex" "$AB/dsh/.credentials.yaml"; then ok "auth selected import writes record"; else echo "FAIL(output): auth selected import writes record"; exit 1; fi
 if HOME="$AB/home" DSH_HOME="$AB/dsh" $BIN auth 2>/dev/null | grep -q "already recognized"; then ok "auth import recognized"; else echo "FAIL(output): auth import recognized"; exit 1; fi
 fmode="$(stat -c %a "$AB/dsh/.credentials.yaml" 2>/dev/null || stat -f "%Lp" "$AB/dsh/.credentials.yaml")"
 if [ "$fmode" = "600" ]; then ok "auth file mode 600"; else echo "FAIL(mode): auth file mode"; exit 1; fi

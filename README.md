@@ -131,32 +131,71 @@ rdsh bench --n 5                     # compare rdsh vs dsh startup
 rdsh serve                           # local web dashboard (:3080)
 ```
 
-### `rdsh auth`: OAuth auto-recognition (drop it in and it works)
+### Credential sharing with rdsh auth
 
-Logins you already did elsewhere are mirrored into
-`$DSH_HOME/.credentials.yaml`, the credential store dsh itself reads:
+External credentials are inventoried without showing their values. Nothing is
+copied until you select a source and credential. OAuth copies use DSH's existing
+version-1 store at $DSH_HOME/.credentials.yaml; API keys use its named refs.
+The selection policy contains only identifiers at $DSH_HOME/rdsh-auth-sharing.json.
 
-- Codex CLI (`~/.codex/auth.json`, ChatGPT OAuth)
-- opencode (`$XDG_DATA_HOME/opencode/auth.json`, e.g. `openai` OAuth
-  becomes the `openai-codex` route)
+~~~sh
+rdsh auth                                      # sources, destinations, selection and undo steps
+rdsh auth --json                               # secret-free machine-readable inventory
+rdsh --dry-run auth --select codex:openai-codex --import  # preview; writes no files
+rdsh auth --select codex:openai-codex --import    # share only Codex OAuth
+rdsh auth --select opencode:openai-codex --import # OpenCode openai maps to openai-codex
+rdsh auth --select codex:OPENAI_API_KEY --import  # separate opt-in for Codex's API key
+rdsh auth --select env:DEEPSEEK_API_KEY --import  # explicitly persist this environment key
+rdsh auth --unselect codex:openai-codex          # stop future copies; retain the existing copy
+rdsh setup                                    # sync selected credentials, then guide setup
+rdsh setup --web                              # inventory, selection commands and explicit key save
+~~~
 
-```sh
-rdsh auth            # status: what was found, what dsh already recognizes
-rdsh auth --import   # write missing/older grants (0600, other entries untouched)
-rdsh auth --json     # machine-readable status
-rdsh setup           # first-run wizard: import, DeepSeek-key paste, --login/--open
-rdsh setup --web     # floating glass setup UI on localhost (browser auto-opens)
-```
+Repeat --select/--unselect for individual credentials. Selecting enables future
+imports from that CLI/provider, including boot, dump-config, plugin, raw dsh
+delegation and setup. --import immediately applies the selection. Even a newer
+grant in another, unselected CLI cannot be chosen. Newer DSH grants and existing
+API-key refs/records remain in place. Other entries, comments and line endings
+are preserved. Unix credential and policy files use mode 0600.
 
-`setup --web` は起動ごとに鍵を発行し、`#key=...` を含む URL を表示します。
-ブラウザーで開くと鍵はそのタブに保存されます。API キーの保存と画面の終了には
-この鍵が必要です。接続状態の読み取りにも同じ鍵が必要です。
-端末に表示された URL を他人と共有しないでください。
+The inventory checks Codex's ~/.codex/auth.json and OpenCode's
+$XDG_DATA_HOME/opencode/auth.json (or its platform default data directory), plus
+the legacy ~/.config/opencode/auth.json fallback. Selectors for OpenCode use
+DSH provider IDs; opencode:openai-codex is the selector for its openai login.
+Environment-key persistence supports DEEPSEEK_API_KEY, OPENAI_API_KEY and
+ANTHROPIC_API_KEY. These are format/presence checks, not live authentication tests.
 
-Booting (`rdsh tui`, `dump-config`, `plugin`) auto-syncs first, so logging
-in with Codex/opencode is enough. `RDSH_AUTH_AUTOSYNC=0` disables it.
-A dsh-side token that is newer is never overwritten, and non-grant
-records (API keys) are left alone.
+An environment variable already supplied to rdsh is inherited by DSH and its
+child processes without rdsh writing a file. The JSON inventory marks this route
+persistent=false, lists its destination and explains how to stop/revoke it.
+Using the reference does not opt in to storing it. setup --yes no longer saves
+every environment key; choose each one with auth --select env:NAME --import.
+Interactive setup and the web form still allow an explicit, individual key save.
+
+**Scope and undo:** saved entries are available to every DSH profile using the
+same DSH_HOME. Unselect stops future rdsh imports; it does not delete a saved copy
+or invalidate a running process. Stop DSH and remove the named record/ref from
+the credential store to stop using a saved copy. To invalidate the credential
+itself, revoke the OAuth grant or rotate the API key at its provider. That may
+also disconnect the source CLI. This controls rdsh copying, not DSH's own
+refreshes, inherited environment access or an OS sandbox.
+
+**Migration:** existing DSH credentials are retained. A missing policy selects
+nothing, including for legacy auth --import. RDSH_AUTH_AUTOSYNC=1 does not restore
+the old import-all behavior. Inventory and preview first, then choose the sources
+you need. RDSH_AUTH_AUTOSYNC=0 disables automatic imports while keeping the
+selection; an explicit auth --import still works. Invalid/unreadable policies
+fail closed instead of falling back to legacy sync.
+
+Consent changes and rdsh credential writes share a lock, so a completed unselect
+cannot be bypassed by a queued rdsh import using an earlier policy. After a
+crashed writer, check that no rdsh auth/setup writer is active before removing
+$DSH_HOME/.rdsh-auth-sharing.lock; the launcher skips copying while it is locked.
+
+setup --web issues a new local access key at startup in its #key=... URL.
+The tab retains that key; status reads, key saves and closing require it.
+Keep the startup URL private. The page shows copy destinations and separate
+unselect, saved-copy removal and provider revocation steps before a key save.
 
 ### `rdsh guard`: a fast hook command for hooks.json
 
@@ -278,9 +317,9 @@ dumps, missing `--profile`) are reproduced in Rust.
 
 ### Verification (all executed)
 
-- `cargo test`: 26 unit tests pass (token math, wildcard matcher, arg splitter, auth splice/freshness, setup lang).
+- `cargo test`: unit and isolated CLI integration tests pass (token math, wildcard matcher, arg splitter, auth splice/freshness, setup lang).
   The suite caught and fixed one real matcher bug (single-pattern substring).
-- `tests/regress.sh`: 35 CLI checks pass (every subcommand, error paths,
+- `tests/regress.sh`: CLI checks pass (every subcommand, error paths,
   auth import round-trip, setup first-run flow, and sandboxed `dsh`-name
   delegation against a fake original).
 - Optimization diffs: old vs. new binary outputs compared byte-for-byte
@@ -301,7 +340,7 @@ dumps, missing `--profile`) are reproduced in Rust.
 ## Project layout
 
 - `src/main.rs` — CLI definition, dispatch, `dsh`-name detection
-- `src/auth.rs` — OAuth auto-recognition (codex/opencode → credentials.yaml)
+- `src/auth.rs` — credential inventory and selected imports (codex/opencode/environment → credentials.yaml)
 - `src/dsh_args.rs` — original `lib/bin.js`-compatible arg splitter (read-only)
 - `src/passthrough.rs` — original-binary discovery + `exec` delegation
 - `src/slim.rs` — slim environment definition
@@ -314,15 +353,15 @@ dumps, missing `--profile`) are reproduced in Rust.
 - `src/serve.rs` + `src/ui.html` — local web dashboard
 - `src/setup_web.rs` + `src/setup.html` — floating glass setup UI (`setup --web`)
 - `install.sh` — installer (`--as-dsh` shadow / `--restore`)
-- `tests/regress.sh` — CLI regression suite (35 checks)
+- `tests/regress.sh` — CLI regression suite (CLI checks)
 
 ## Contributing
 
 ```sh
 cargo fmt --check      # must be clean
 cargo clippy --all-targets -- -D warnings   # must be clean
-cargo test             # 26 unit tests
-BIN=./target/debug/rdsh sh tests/regress.sh # 35 CLI checks (needs cargo build first)
+cargo test             # unit and isolated CLI integration tests
+BIN=./target/debug/rdsh sh tests/regress.sh # CLI checks (needs cargo build first)
 ```
 
 No new dependencies without discussion: binary size and startup time are

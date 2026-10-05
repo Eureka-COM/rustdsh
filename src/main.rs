@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 mod auth;
+mod auth_sharing;
 mod compact;
 mod dsh_args;
 mod guard;
@@ -115,16 +116,10 @@ enum Commands {
         #[arg(long = "port", default_value_t = 3080)]
         port: u16,
     },
-    /// OAuth auto-recognition: external logins (codex/opencode) mirrored
-    /// into $DSH_HOME/.credentials.yaml ("drop in and recognized")
-    Auth {
-        #[arg(long = "import")]
-        import: bool,
-        #[arg(long = "json")]
-        json: bool,
-    },
-    /// First-run connect: import what exists, persist env keys, optionally
-    /// run the provider login flow or reveal settings dirs, else show next step
+    /// Inventory, select and import only explicitly shared credentials
+    Auth(auth_sharing::AuthArgs),
+    /// First-run connect: sync selected credentials, optionally run login
+    /// or reveal settings dirs, else show the next step
     Setup {
         #[arg(long = "open")]
         open: bool,
@@ -233,7 +228,7 @@ fn main() {
         Some(Commands::Serve { port }) => serve::cmd_serve(port),
         Some(Commands::Bench { n }) => bench(n),
         Some(Commands::Guard { deny, reason, json }) => guard::cmd_guard(deny, reason, json),
-        Some(Commands::Auth { import, json }) => auth::cmd_auth(import, json),
+        Some(Commands::Auth(args)) => auth::cmd_auth(args, dry),
         Some(Commands::Setup {
             open,
             login,
@@ -242,10 +237,10 @@ fn main() {
             web,
             port,
         }) => {
-            if web {
+            if web && !dry {
                 setup_web::cmd_setup_web(port)
             } else {
-                auth::cmd_setup(open, login, json, yes)
+                auth::cmd_setup(open, login, json, yes, dry)
             }
         }
         Some(Commands::DumpConfig { profile, native }) => {
