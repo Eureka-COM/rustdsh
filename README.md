@@ -234,6 +234,8 @@ Co-use notes:
 
 ## Web dashboard
 
+For the read-only workflow member board in DSH's conversation GUI, use the [verified source-patch preparation tool](plugins/workflow-board/README.md). It includes the 18-file board patch, compatibility diagnostics and fixture tests; applying it never replaces the installed DSH or changes a profile.
+
 ```sh
 rdsh serve
 # open the URL containing #key=... printed by rdsh (localhost only)
