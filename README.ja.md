@@ -273,7 +273,7 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 
 - まず [CONTRIBUTING.md](CONTRIBUTING.md)（PRは4行、スクリーンショット規定）。
 - バグ・要望：[Issueフォーム](https://github.com/sahenjp/rustdsh/issues/new/choose)（日本語OK）。
-- 質問・相談：[Discussions](https://github.com/sahenjp/rustdsh/discussions)。
+- 質問・相談：[Issues](https://github.com/sahenjp/rustdsh/issues)。
 - 脆弱性は公開Issueに書かず [SECURITY.md](SECURITY.md) へ。
 - 設計資料：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)・
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md)・[docs/ROADMAP.md](docs/ROADMAP.md)・
