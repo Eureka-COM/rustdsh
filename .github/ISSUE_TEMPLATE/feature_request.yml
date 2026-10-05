@@ -1,0 +1,29 @@
+name: Feature request
+title: "[Feature] "
+description: Propose an idea. 機能要望 (Japanese OK).
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: nongoal
+    attributes:
+      label: Non-goals
+      description: What is explicitly out of scope?
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Sketch of the change. Note if delegation must stay byte-identical.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Fit check
+      options:
+        - label: Keeps the agent loop / profile boot in `dsh` (no reimplementation)
+        - label: Includes acceptance criteria I can test

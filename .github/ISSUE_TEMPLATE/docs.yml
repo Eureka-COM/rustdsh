@@ -1,0 +1,18 @@
+name: Docs
+title: "[Docs] "
+description: README, guides, translations. ドキュメント修正 (Japanese OK).
+labels: [docs]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: Which file? e.g. README.md, README.ja.md, docs/...
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and suggestion
+    validations:
+      required: true
