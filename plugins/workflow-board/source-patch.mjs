@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { readFileSync, realpathSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -23,6 +23,15 @@ function successful(result, code, message) {
   return result.stdout.trim()
 }
 
+function sameDirectory(left, right) {
+  if (realpathSync(left) === realpathSync(right)) return true
+  // Windows preserves drive-letter spelling in realpath; compare actual directory identity.
+  const first = statSync(left, { bigint: true })
+  const second = statSync(right, { bigint: true })
+  return first.isDirectory() && second.isDirectory() && first.ino !== 0n
+    && first.dev === second.dev && first.ino === second.ino
+}
+
 /** Apply only the bundled board patch to an explicitly selected, compatible source checkout. */
 export function prepare(sourcePath, { apply = false, patch, manifest } = {}) {
   patch ??= readFileSync(resolve(bundle, 'workflow-board.patch'))
@@ -35,7 +44,7 @@ export function prepare(sourcePath, { apply = false, patch, manifest } = {}) {
     throw new PatchError('SOURCE_MISSING', 'Select an existing DSH source checkout with --source.')
   }
   const top = successful(git(source, ['rev-parse', '--show-toplevel']), 'SOURCE_NOT_GIT', 'Select a DSH Git source checkout, not an installed package or profile.')
-  if (realpathSync(top) !== source) throw new PatchError('SOURCE_NOT_ROOT', '--source must select the checkout root.')
+  if (!sameDirectory(top, source)) throw new PatchError('SOURCE_NOT_ROOT', '--source must select the checkout root.')
   const head = successful(git(source, ['rev-parse', 'HEAD']), 'HEAD_UNAVAILABLE', 'The source HEAD cannot be read.')
   if (head !== manifest.base_commit) {
     throw new PatchError('UNSUPPORTED_BASE', 'This source revision is not the verified board base. Do not apply it to installed DSH or a different upstream revision.')

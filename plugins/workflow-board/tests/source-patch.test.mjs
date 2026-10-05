@@ -43,6 +43,13 @@ test('checks without writing; applies to a checkout with spaces; repeated applic
   assert.equal(prepare(f.source, { ...f, apply: true }).state, 'already-applied')
 })
 
+test('Windows drive-letter casing still identifies the same source root', { skip: process.platform !== 'win32' }, t => {
+  const f = fixture(t)
+  const alternate = f.source.replace(/^[A-Z]:/, drive => drive.toLowerCase())
+  assert.equal(prepare(alternate, f).state, 'ready')
+  assert.equal(f.git('status', '--porcelain'), '')
+})
+
 test('rejects modified source, untracked files, wrong roots and unsupported revisions', t => {
   const f = fixture(t)
   writeFileSync(join(f.source, 'card.txt'), 'user edit\n')
