@@ -43,7 +43,10 @@ jobs:
       - if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --target ${{ matrix.target }}
+      - if: runner.os != 'Windows'
         run: tar -czf ${{ matrix.pkg }} -C target/${{ matrix.target }}/release ${{ matrix.bin }}
+      - if: runner.os == 'Windows'
+        shell: pwsh
         run: Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin }}" -DestinationPath ${{ matrix.pkg }}
       # Sidecar checksum per asset (distinct names, no matrix race).
       # install.sh verifies it and refuses mismatches.
