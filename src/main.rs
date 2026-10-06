@@ -275,8 +275,7 @@ fn invoked_as_dsh() -> bool {
         .file_name()
         .and_then(|s| s.to_str())
         // Native Windows installs run as dsh.exe.
-        .map(|s| s == "dsh" || s == "dsh.exe")
-        .unwrap_or(false)
+        .is_some_and(|s| s == "dsh" || s == "dsh.exe")
 }
 
 fn main() {
