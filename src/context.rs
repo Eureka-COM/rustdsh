@@ -218,7 +218,7 @@ fn session_files_sorted(limit_dirs: usize) -> Vec<std::path::PathBuf> {
         Ok(e) => {
             let mut v: Vec<_> = e
                 .filter_map(|e| e.ok())
-                .filter(|e| e.metadata().map(|m| m.is_dir()).unwrap_or(false))
+                .filter(|e| e.metadata().is_ok_and(|m| m.is_dir()))
                 .map(|e| e.path())
                 .collect();
             v.sort();
