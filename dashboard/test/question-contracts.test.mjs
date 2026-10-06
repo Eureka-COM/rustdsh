@@ -79,6 +79,41 @@ async function setup(t) {
   };
 }
 
+test("restoring an older snapshot never revalidates that older revision's answer", async (t) => {
+  const f = await setup(t);
+  await f.store.mutate("question", ask());
+  const first = structuredClone(f.card());
+  await f.store.mutate("answer", answer(first));
+  const original = structuredClone(f.store.value.feedback[0]);
+  await f.store.mutate(
+    "question",
+    ask(approval(12, "different-action", "target-v2"), {
+      action: "revise",
+      expected_revision: 1,
+    }),
+  );
+  await f.store.mutate(
+    "question",
+    ask(approval(), { action: "revise", expected_revision: 2 }),
+  );
+  assert.equal(f.card().fingerprint, first.fingerprint);
+  await f.store.mutate(
+    "answer",
+    answer(f.card(), { answer: "最新版の対象は保留", choice_id: "hold" }),
+  );
+  const messages = feedbackSince(f.store.value, 0).messages;
+  assert.equal(messages[0].contract_validity, "invalidated");
+  assert.equal(messages[0].invalidation_reason, "question_contract_changed");
+  assert.equal(messages[1].contract_validity, "current");
+  assert.equal(messages[1].contract_revision, 3);
+  assert.deepEqual(f.store.value.feedback[0], original);
+  const reopened = await ProjectStore.open(f.project);
+  assert.equal(
+    publicState(reopened.value).feedback[0].contract_validity,
+    "invalidated",
+  );
+});
+
 test("legacy consultations retain their field shapes and a default action grants no typed approval", async (t) => {
   const f = await setup(t);
   await f.store.mutate("question", {
