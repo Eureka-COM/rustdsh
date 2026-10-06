@@ -145,7 +145,12 @@ fn scan_sessions(root: &str, project: Option<&str>) -> Vec<Session> {
     out
 }
 
-pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool, json: bool) -> anyhow::Result<()> {
+pub fn cmd_sessions(
+    project: Option<String>,
+    limit: usize,
+    tokens: bool,
+    json: bool,
+) -> anyhow::Result<()> {
     let root = format!("{}/sessions", dsh_home());
     if project.is_none() && std::fs::read_dir(&root).is_err() {
         if json {
