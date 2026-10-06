@@ -5,6 +5,23 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-06
+
+### Added
+
+- `rdsh sessions --json`: machine-readable session list for sidecar use
+  (Desktop/Electron); default table output is unchanged.
+- GitHub community health: Code of Conduct, Security/Support policy,
+  issue forms, PR template, Dependabot, docs set.
+- Docs: ARCHITECTURE / BENCHMARKS / ROADMAP / RELEASING guides.
+- rdsh settings UI bundled by default (`./plugins/install.sh`) and
+  matched to the Harness theme; see `docs/RDSH-SETTINGS.md`.
+
+### Fixed
+
+- `rdsh doctor` no longer reads huge binaries in full (4.6s -> 0.1s);
+  entries are size-gated before reading, warnings unchanged.
+
 ### Changed
 
 - Context engine は既定OFFになりました（実験的）。使うときだけ
@@ -14,14 +31,6 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   `rdsh.json` に一本化（旧ファイルは補完のみ）。
 - `rdsh settings get/set/unset/keys` を追加し、context以外も
   CLIから編集できます（例: `search.max`、`guard.deny`、`serve.port`）。
-
-### Added
-
-- GitHub community health: Code of Conduct, Security/Support policy,
-  issue forms, PR template, Dependabot, docs set.
-- Docs: ARCHITECTURE / BENCHMARKS / ROADMAP / RELEASING guides.
-- rdsh settings UI bundled by default (`./plugins/install.sh`) and
-  matched to the Harness theme; see `docs/RDSH-SETTINGS.md`.
 
 ## [0.1.3] - 2026-10-05
 
@@ -57,7 +66,8 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 - Floating setup UI, dsh-default detection, SearXNG search.
 - Installers: install.sh (Linux/macOS/WSL), install.ps1 (Windows).
 
-[Unreleased]: https://github.com/sahenjp/rustdsh/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/sahenjp/rustdsh/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/sahenjp/rustdsh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/sahenjp/rustdsh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/sahenjp/rustdsh/releases/tag/v0.1.2
 [0.1.0]: https://github.com/sahenjp/rustdsh/tree/806c583
