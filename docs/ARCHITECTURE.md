@@ -53,6 +53,27 @@ See `dashboard/README.md`.
 - `audit-rdsh.sh` + `systemd/rdsh-audit.*`: periodic audit hooks.
 - `plugins/`: Smart-DSH compat bundle, update banner, skill installer.
 
+## Original-binary discovery (`dsh` name)
+
+When invoked as `dsh`, the lookup order is: `RDSH_ORIG_BIN` (legacy
+`DSH_ORIG_BIN` still honored) → `~/.config/rdsh/origin` → sibling backups
+(`dsh-orig`, `dsh.orig`, `dsh.real`) → `PATH` (self excluded) → newest
+`~/.local/opt/node-v*` tree matching this OS/CPU.
+
+Naming follows dsh convention (kebab-case commands/flags like `dump-config`);
+the `DSH_` env namespace stays owned by dsh itself, rdsh-private keys live
+under `RDSH_`. Slim also sets `NODE_COMPILE_CACHE` (Node >= 22.1 only, user
+value wins, `RDSH_NODE_COMPILE_CACHE=0` opts out).
+
+## Performance notes
+
+- Token estimation: pure-ASCII input is one `len/4` step; non-ASCII keeps the
+  exact scan (identical results).
+- Search: sequential walk fixes order, files are grepped in parallel, hits merge
+  back in walk order. Trees under 32 files keep the sequential path.
+- `sessions --tokens`: parallel zstd expansion (same numbers, order kept).
+- Release profile: `opt-level=z`, LTO, `strip`, `panic=abort` (~806KB).
+
 ## Invariants for contributors
 
 1. Never reimplement the agent loop or profile boot.

@@ -51,32 +51,20 @@ For the full proposal backlog, see the index at
 [issue #74](https://github.com/sahenjp/rustdsh/issues/74)
 (all 72 proposals mapped to feature issues, priority P0-P3).
 
-## Branch protection proposal (`main`)
+## Branch protection (`main`)
 
-This is a proposal memo (settings need admin). See
-[issue #11](https://github.com/sahenjp/rustdsh/issues/11).
-
-- Require PRs for `main`: no direct push, no force push, no deletion.
-- Require at least one approval from someone other than the PR author.
-- Require status checks (lint, Rust tests per OS, dashboard tests) to pass.
-- Dismiss stale approvals when new commits are pushed.
-- Keep bypass permissions minimal; review collaborator `write` access
-  (fork-based PRs are enough for code-only contributors).
+Admin settings live in [issue #11](https://github.com/sahenjp/rustdsh/issues/11).
+Contributors only need this: open PRs against `main`, keep checks green.
 
 ---
 
 ## 日本語
 
-### main の保護提案メモ
+### main の保護設定
 
-設定自体は管理者権限が必要です。詳しくは
+設定は管理者権限が必要なため、詳しくは
 [Issue #11](https://github.com/sahenjp/rustdsh/issues/11)を見てください。
-
-- `main` への直接push・force push・削除を禁止し、PR経由にします。
-- PR作成者以外の承認を最低1件必須にします。
-- lint・Rust各OSテスト・dashboard各OSテストの成功を必須にします。
-- 追加コミットで古い承認を無効化します。
-- bypass権限は最小化し、協力者のwrite権限も見直します。
+寄稿者は `main` へのPRとチェック通過だけ意識すれば十分です。
 
 ### Pull Request
 
