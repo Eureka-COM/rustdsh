@@ -209,7 +209,7 @@ fn scan_project(pdir: &std::path::Path, proj: &str) -> Vec<Session> {
         Err(_) => return v,
     };
     for e in entries.filter_map(|e| e.ok()) {
-        if !e.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+        if !e.metadata().is_ok_and(|m| m.is_dir()) {
             continue;
         }
         let id = e.file_name().to_string_lossy().into_owned();
