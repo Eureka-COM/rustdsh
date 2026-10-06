@@ -27,7 +27,7 @@ function settingsDefaults() {
     guard: { deny: [], reason: '' },
     bench: { n: 5 },
     setup: { web_port: 0 },
-    beta: { context_engine: true },
+    beta: { context_engine: false },
     context: { token_budget: 4000, enable_retriever: true, enable_packer: true, enable_verifier: true, goal: '', decisions: [], constraints: [], working_files: [], open_tasks: [], max_code_hits: 20, max_sessions: 10, include_git_diff: true },
   };
 }
@@ -157,7 +157,7 @@ function sanitizeSettings(j) {
       working_files: strList(cx.working_files ?? cx.files, 50, 300),
       open_tasks: strList(cx.open_tasks, 50, 500),
       max_code_hits: clampInt(cx.max_code_hits, 1, 100, d.context.max_code_hits),
-      max_sessions: clampInt(cx.max_sessions, 1, 100, d.context.max_sessions),
+      max_sessions: clampInt(cx.max_sessions, 0, 100, d.context.max_sessions),
       include_git_diff: bool(cx.include_git_diff, d.context.include_git_diff),
     },
   };

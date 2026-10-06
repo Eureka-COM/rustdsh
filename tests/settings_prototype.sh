@@ -91,6 +91,13 @@ if [ -x "$BIN" ]; then
   if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings show --json 2>/dev/null | grep -q '"schema"'; then ok "settings show"; else echo "FAIL: settings show"; exit 1; fi
   if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings path 2>/dev/null | grep -q "rdsh.json"; then ok "settings path"; else echo "FAIL: settings path"; exit 1; fi
   if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings init >/dev/null 2>&1; then echo "FAIL: second init should exit nonzero"; exit 1; else ok "settings init guards overwrite"; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings keys 2>/dev/null | grep -q "beta.context_engine"; then ok "settings keys"; else echo "FAIL: settings keys"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings get beta.context_engine 2>/dev/null | grep -q "false"; then ok "settings get default OFF"; else echo "FAIL: default OFF"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings set search.max 42 2>/dev/null | grep -q "42"; then ok "settings set"; else echo "FAIL: settings set"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings get search.max 2>/dev/null | grep -q "42"; then ok "settings get"; else echo "FAIL: settings get"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings set context.goal "hello-goal" >/dev/null 2>&1 && HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings get context.goal 2>/dev/null | grep -q "hello-goal"; then ok "settings set context.goal"; else echo "FAIL: set context.goal"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings unset search.max >/dev/null 2>&1 && HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings get search.max 2>/dev/null | grep -q "100"; then ok "settings unset"; else echo "FAIL: settings unset"; exit 1; fi
+  if HOME="$CSB" DSH_HOME="$CSB/dsh" "$BIN" settings get unknown.key >/dev/null 2>&1; then echo "FAIL: unknown key should fail"; exit 1; else ok "settings get guards unknown"; fi
   rm -rf "$CSB"
 fi
 

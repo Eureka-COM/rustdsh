@@ -5,6 +5,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Context engine は既定OFFになりました（実験的）。使うときだけ
+  `rdsh settings set beta.context_engine true` でONにします。
+- Context engine v2: 複合語の点数検索、優先度パッキング
+  （goal優先・retrievedから削減）、git snapshot強化、設定は
+  `rdsh.json` に一本化（旧ファイルは補完のみ）。
+- `rdsh settings get/set/unset/keys` を追加し、context以外も
+  CLIから編集できます（例: `search.max`、`guard.deny`、`serve.port`）。
+
 ### Added
 
 - GitHub community health: Code of Conduct, Security/Support policy,

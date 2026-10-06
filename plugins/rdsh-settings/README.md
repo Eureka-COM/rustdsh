@@ -21,4 +21,5 @@ dsh plugin --profile web add ./plugins/rdsh-settings
 ```
 
 外すときはプロファイルのプラグイン一覧から rdsh-settings を外します。
-テスト実装なので既定は全てON・budget 4000です。
+テスト実装なので context engine は既定OFF（beta.context_engine=false）。
+使うときだけONにします。

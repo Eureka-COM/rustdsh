@@ -180,7 +180,7 @@ impl Default for BenchSection {
 impl Default for BetaSection {
     fn default() -> Self {
         Self {
-            context_engine: true,
+            context_engine: false,
         }
     }
 }
@@ -347,7 +347,7 @@ impl RdshSettings {
                 },
             },
             beta: BetaSection {
-                context_engine: flag(&be, "context_engine", true),
+                context_engine: flag(&be, "context_engine", false),
             },
             context: ContextSection {
                 token_budget: clamp_u64(num(&cx, "token_budget"), 4000, 500, 200000) as usize,
@@ -367,7 +367,7 @@ impl RdshSettings {
                 },
                 open_tasks: list(&cx, "open_tasks", TEXT_CHARS),
                 max_code_hits: clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize,
-                max_sessions: clamp_u64(num(&cx, "max_sessions"), 10, 1, 100) as usize,
+                max_sessions: clamp_u64(num(&cx, "max_sessions"), 10, 0, 100) as usize,
                 include_git_diff: flag(&cx, "include_git_diff", true),
             },
         };
@@ -431,7 +431,7 @@ impl RdshSettings {
             Some(n) => n.clamp(1, 65535) as u16,
         };
         let be = v.get("beta").cloned().unwrap_or(serde_json::Value::Null);
-        out.beta.context_engine = flag(&be, "context_engine", true);
+        out.beta.context_engine = flag(&be, "context_engine", false);
         let cx = v.get("context").cloned().unwrap_or(serde_json::Value::Null);
         out.context.token_budget = clamp_u64(num(&cx, "token_budget"), 4000, 500, 200000) as usize;
         out.context.enable_retriever = flag(&cx, "enable_retriever", true);
@@ -450,7 +450,7 @@ impl RdshSettings {
         };
         out.context.open_tasks = list(&cx, "open_tasks", TEXT_CHARS);
         out.context.max_code_hits = clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize;
-        out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 10, 1, 100) as usize;
+        out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 10, 0, 100) as usize;
         out.context.include_git_diff = flag(&cx, "include_git_diff", true);
         out
     }
@@ -494,6 +494,174 @@ impl RdshSettings {
                 "include_git_diff": self.context.include_git_diff,
             },
         })
+    }
+
+    /// dotted key (`section.field`) の現在値を JSON で返す。section単体も可。
+    pub fn get_dotted(&self, key: &str) -> Option<serde_json::Value> {
+        let v = self.to_value();
+        let key = key.trim().trim_matches('.');
+        if key.is_empty() || key == "all" {
+            return Some(v);
+        }
+        let mut cur = &v;
+        for part in key.split('.') {
+            cur = cur.get(part)?;
+        }
+        Some(cur.clone())
+    }
+
+    /// dotted keyへ値を設定する。不正キーはErr。保存は呼び出し側が行う。
+    pub fn set_dotted(&mut self, key: &str, raw: &str) -> anyhow::Result<()> {
+        let key = key.trim().trim_matches('.').to_string();
+        let bad = || anyhow::anyhow!("unknown settings key: {key} (try: rdsh settings keys)");
+        match key.as_str() {
+            "general.slim" => self.general.slim = parse_bool(raw)?,
+            "general.passthrough" => self.general.passthrough = parse_bool(raw)?,
+            "general.dry_run" => self.general.dry_run = parse_bool(raw)?,
+            "general.default_profile" => self.general.default_profile = parse_string(raw, PROFILE_CHARS),
+            "tokens.default_budget" => {
+                self.tokens.default_budget = parse_usize(raw, 4000)? as usize
+            }
+            "search.dir" => {
+                let d = parse_string(raw, PATH_CHARS);
+                self.search.dir = if d.trim().is_empty() { ".".to_string() } else { d };
+            }
+            "search.max" => self.search.max = parse_usize(raw, 100)? as usize,
+            "search.web_limit" => self.search.web_limit = parse_usize(raw, 10)? as usize,
+            "search.searxng_url" => self.search.searxng_url = parse_string(raw, URL_CHARS),
+            "compact.max_tokens" => self.compact.max_tokens = parse_usize(raw, 8000)? as usize,
+            "sessions.limit" => self.sessions.limit = parse_usize(raw, 20)? as usize,
+            "sessions.with_tokens" => self.sessions.with_tokens = parse_bool(raw)?,
+            "logs.tail" => self.logs.tail = parse_usize(raw, 50)? as usize,
+            "serve.port" => self.serve.port = parse_usize(raw, 3080)? as u16,
+            "guard.deny" => self.guard.deny = parse_list(raw, TEXT_CHARS),
+            "guard.reason" => self.guard.reason = parse_string(raw, TEXT_CHARS),
+            "bench.n" => self.bench.n = parse_usize(raw, 5)? as u32,
+            "setup.web_port" => self.setup.web_port = parse_usize(raw, 0)? as u16,
+            "beta.context_engine" => self.beta.context_engine = parse_bool(raw)?,
+            "context.token_budget" => {
+                self.context.token_budget = parse_usize(raw, 4000)? as usize
+            }
+            "context.enable_retriever" => self.context.enable_retriever = parse_bool(raw)?,
+            "context.enable_packer" => self.context.enable_packer = parse_bool(raw)?,
+            "context.enable_verifier" => self.context.enable_verifier = parse_bool(raw)?,
+            "context.goal" => self.context.goal = parse_string(raw, GOAL_CHARS),
+            "context.decisions" => self.context.decisions = parse_list(raw, TEXT_CHARS),
+            "context.constraints" => self.context.constraints = parse_list(raw, TEXT_CHARS),
+            "context.working_files" | "context.files" => {
+                self.context.working_files = parse_list(raw, PATH_CHARS)
+            }
+            "context.open_tasks" => self.context.open_tasks = parse_list(raw, TEXT_CHARS),
+            "context.max_code_hits" => {
+                self.context.max_code_hits = parse_usize(raw, 20)? as usize
+            }
+            "context.max_sessions" => {
+                self.context.max_sessions = parse_usize(raw, 10)? as usize
+            }
+            "context.include_git_diff" => self.context.include_git_diff = parse_bool(raw)?,
+            _ => return Err(bad()),
+        }
+        self.sanitize();
+        Ok(())
+    }
+
+    /// dotted keyを既定値に戻す。section単体で節全体を初期化する。
+    pub fn reset_dotted(&mut self, key: &str) -> anyhow::Result<()> {
+        let key = key.trim().trim_matches('.').to_string();
+        // 先に未知キー判定（d を動かす前に）
+        let known_section = matches!(
+            key.as_str(),
+            "general"
+                | "tokens"
+                | "search"
+                | "compact"
+                | "sessions"
+                | "logs"
+                | "serve"
+                | "guard"
+                | "bench"
+                | "setup"
+                | "beta"
+                | "context"
+                | "all"
+                | ""
+        );
+        if !known_section && RdshSettings::default().get_dotted(&key).is_none() {
+            return Err(anyhow::anyhow!("unknown settings key: {key} (try: rdsh settings keys)"));
+        }
+        let d = RdshSettings::default();
+        match key.as_str() {
+            "general" => self.general = d.general,
+            "tokens" => self.tokens = d.tokens,
+            "search" => self.search = d.search,
+            "compact" => self.compact = d.compact,
+            "sessions" => self.sessions = d.sessions,
+            "logs" => self.logs = d.logs,
+            "serve" => self.serve = d.serve,
+            "guard" => self.guard = d.guard,
+            "bench" => self.bench = d.bench,
+            "setup" => self.setup = d.setup,
+            "beta" => self.beta = d.beta,
+            "context" => self.context = d.context,
+            "all" | "" => *self = d,
+            _ => {
+                // 単項目は既定節から写す
+                let tmp = d.clone();
+                self.set_dotted_fallback(&key, &tmp)?;
+            }
+        }
+        self.sanitize();
+        Ok(())
+    }
+
+    fn set_dotted_fallback(&mut self, key: &str, src: &RdshSettings) -> anyhow::Result<()> {
+        let v = src
+            .get_dotted(key)
+            .ok_or_else(|| anyhow::anyhow!("unknown settings key: {key}"))?;
+        let raw = if v.is_string() {
+            v.as_str().unwrap_or_default().to_string()
+        } else {
+            serde_json::to_string(&v).unwrap_or_default()
+        };
+        // 空文字の扱い: 文字列節はそのまま空に戻す
+        self.set_dotted(key, &raw)
+    }
+
+    /// 設定キー一覧（help用）。
+    pub fn keys() -> &'static [&'static str] {
+        &[
+            "general.slim(bool)",
+            "general.passthrough(bool)",
+            "general.dry_run(bool)",
+            "general.default_profile(string)",
+            "tokens.default_budget(500-200000)",
+            "search.dir(string)",
+            "search.max(1-100)",
+            "search.web_limit(1-100)",
+            "search.searxng_url(string)",
+            "compact.max_tokens(500-200000)",
+            "sessions.limit(1-100)",
+            "sessions.with_tokens(bool)",
+            "logs.tail(1-500)",
+            "serve.port(1-65535)",
+            "guard.deny(list)",
+            "guard.reason(string)",
+            "bench.n(1-20)",
+            "setup.web_port(0-65535, 0=random)",
+            "beta.context_engine(bool, default OFF)",
+            "context.token_budget(500-200000)",
+            "context.enable_retriever(bool)",
+            "context.enable_packer(bool)",
+            "context.enable_verifier(bool)",
+            "context.goal(string)",
+            "context.decisions(list)",
+            "context.constraints(list)",
+            "context.working_files(list)",
+            "context.open_tasks(list)",
+            "context.max_code_hits(1-100)",
+            "context.max_sessions(0-100)",
+            "context.include_git_diff(bool)",
+        ]
     }
 }
 
@@ -561,7 +729,7 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
     }
     if c.max_sessions == ContextSection::default().max_sessions {
         if let Some(n) = num(&v, "max_sessions") {
-            c.max_sessions = n.clamp(1, 100) as usize;
+            c.max_sessions = n.clamp(0, 100) as usize;
         }
     }
 }
@@ -602,6 +770,94 @@ fn truncate(s: &str, max_chars: usize) -> String {
 
 fn clamp_u64(n: Option<u64>, default: u64, lo: u64, hi: u64) -> u64 {
     n.unwrap_or(default).clamp(lo, hi)
+}
+
+fn parse_bool(raw: &str) -> anyhow::Result<bool> {
+    let s = raw.trim().to_lowercase();
+    match s.as_str() {
+        "true" | "1" | "yes" | "on" | "enable" | "enabled" => Ok(true),
+        "false" | "0" | "no" | "off" | "disable" | "disabled" => Ok(false),
+        _ => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
+                if let Some(b) = v.as_bool() {
+                    return Ok(b);
+                }
+            }
+            Err(anyhow::anyhow!("bool ではありません: {raw} (true/false)"))
+        }
+    }
+}
+
+fn parse_usize(raw: &str, _fallback: u64) -> anyhow::Result<u64> {
+    let s = raw.trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+        if let Some(n) = v.as_u64() {
+            return Ok(n);
+        }
+        if let Some(n) = v.as_i64() {
+            if n >= 0 {
+                return Ok(n as u64);
+            }
+        }
+    }
+    s.parse::<u64>()
+        .map_err(|_| anyhow::anyhow!("数値ではありません: {raw}"))
+}
+
+fn parse_string(raw: &str, max_chars: usize) -> String {
+    let s = raw.trim();
+    if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
+        || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
+    {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+            if let Some(st) = v.as_str() {
+                return truncate(st, max_chars);
+            }
+        }
+        return truncate(&s[1..s.len() - 1], max_chars);
+    }
+    truncate(s, max_chars)
+}
+
+fn parse_list(raw: &str, max_chars: usize) -> Vec<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return vec![];
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+        if let Some(arr) = v.as_array() {
+            return arr
+                .iter()
+                .filter_map(|x| x.as_str().map(|t| truncate(t, max_chars)))
+                .filter(|t| !t.trim().is_empty())
+                .take(MAX_ITEMS)
+                .collect();
+        }
+        if let Some(st) = v.as_str() {
+            return split_list(st, max_chars);
+        }
+    }
+    split_list(s, max_chars)
+}
+
+fn split_list(s: &str, max_chars: usize) -> Vec<String> {
+    // 改行・カンマ区切りを許容し、JSON配列でなくても1行1件で入る
+    let mut out = vec![];
+    for part in s.split(|c| c == '\n' || c == ',').map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        // 余分な引用を剥がす
+        let t = part.trim_matches('"').trim_matches('\'').trim();
+        if t.is_empty() {
+            continue;
+        }
+        out.push(truncate(t, max_chars));
+        if out.len() >= MAX_ITEMS {
+            break;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -648,7 +904,7 @@ mod rdsh_config_tests {
         assert!(d.guard.deny.is_empty() && d.guard.reason.is_empty());
         assert_eq!(d.bench.n, 5);
         assert_eq!(d.setup.web_port, 0);
-        assert!(d.beta.context_engine);
+        assert!(!d.beta.context_engine);
         assert_eq!(d.context.token_budget, 4000);
         assert!(d.context.enable_retriever && d.context.enable_packer && d.context.enable_verifier);
         assert!(d.context.goal.is_empty());
@@ -800,5 +1056,41 @@ mod rdsh_config_tests {
             assert_eq!(c.context.open_tasks, vec!["packing評価".to_string()]);
             assert!(!std::path::Path::new(&settings_path()).exists());
         });
+    }
+
+    #[test]
+    fn dotted_get_set_unset_cover_all_sections() {
+        let mut c = RdshSettings::default();
+        // get
+        assert_eq!(
+            c.get_dotted("search.max").unwrap(),
+            serde_json::json!(100)
+        );
+        assert!(c.get_dotted("beta.context_engine").unwrap().as_bool() == Some(false));
+        // set: 数値・真偽・文字・配列
+        c.set_dotted("search.max", "42").unwrap();
+        assert_eq!(c.search.max, 42);
+        c.set_dotted("beta.context_engine", "true").unwrap();
+        assert!(c.beta.context_engine);
+        c.set_dotted("context.goal", "v2-goal").unwrap();
+        assert_eq!(c.context.goal, "v2-goal");
+        c.set_dotted("guard.deny", r#"["a*","b"]"#).unwrap();
+        assert_eq!(c.guard.deny, vec!["a*".to_string(), "b".to_string()]);
+        c.set_dotted("context.working_files", "src/a.rs, src/b.rs").unwrap();
+        assert_eq!(c.context.working_files.len(), 2);
+        c.set_dotted("serve.port", "38080").unwrap();
+        assert_eq!(c.serve.port, 38080);
+        assert!(c.set_dotted("unknown.key", "1").is_err());
+        // unset: 単項目と節全体
+        c.set_dotted("search.max", "7").unwrap();
+        c.reset_dotted("search.max").unwrap();
+        assert_eq!(c.search.max, 100);
+        c.set_dotted("context.goal", "tmp").unwrap();
+        c.reset_dotted("context").unwrap();
+        assert!(c.context.goal.is_empty());
+        c.set_dotted("search.max", "7").unwrap();
+        c.reset_dotted("all").unwrap();
+        assert_eq!(c, RdshSettings::default());
+        assert!(c.reset_dotted("unknown.key").is_err());
     }
 }

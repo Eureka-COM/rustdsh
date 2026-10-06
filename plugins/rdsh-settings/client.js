@@ -142,8 +142,8 @@ window.__ModuleLoader__.load({
           h('div', { style: row }, h('span', { style: label }, '回数'), h('input', { type: 'number', min: 1, max: 20, value: be.n, onChange: (e) => num('bench', 'n', e.target.value, 5), style: { ...input, maxWidth: 110 } })),
           h('div', { style: label }, 'セットアップ (setup)'),
           h('div', { style: row }, h('span', { style: label }, 'Webポート (0=ランダム)'), h('input', { type: 'number', min: 0, max: 65535, value: su.web_port, onChange: (e) => num('setup', 'web_port', e.target.value, 0), style: { ...input, maxWidth: 110 } })),
-          h('div', { style: label }, 'ベータ (beta)'),
-          h('div', { style: row }, h('label', { style: row }, h('input', { type: 'checkbox', checked: !!bt.context_engine, onChange: (e) => setPath('beta', 'context_engine', e.target.checked) }), 'context engine を有効化'))
+          h('div', { style: label }, 'ベータ (beta) — 既定OFF'),
+          h('div', { style: row }, h('label', { style: row }, h('input', { type: 'checkbox', checked: !!bt.context_engine, onChange: (e) => setPath('beta', 'context_engine', e.target.checked) }), 'context engine を有効化（実験的、既定OFF）'))
         ),
         h('div', { style: card },
           h('p', { style: title }, 'context 詳細 (rdsh.json 内 context)'),

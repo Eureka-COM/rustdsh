@@ -224,6 +224,23 @@ enum SettingsAction {
         #[arg(long = "force")]
         force: bool,
     },
+    /// Get one value: rdsh settings get search.max / context.goal / beta.context_engine
+    Get {
+        key: String,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Set one value: rdsh settings set search.max 50 / guard.deny '["a*"]' / context.goal "方針"
+    Set {
+        key: String,
+        value: String,
+    },
+    /// Reset to defaults: rdsh settings unset search.max (or a whole section like context)
+    Unset {
+        key: String,
+    },
+    /// List editable keys
+    Keys,
 }
 
 /// First-arg subcommands owned by rdsh. When installed as `dsh`, anything else
@@ -377,11 +394,80 @@ fn main() {
                     Err(e) => Err(e),
                 }
             }
+            SettingsAction::Get { key, json } => {
+                let cfg = rdsh_config::load();
+                match cfg.get_dotted(&key) {
+                    Some(v) => {
+                        if json || v.is_object() || v.is_array() {
+                            match serde_json::to_string_pretty(&v) {
+                                Ok(text) => {
+                                    println!("{text}");
+                                    Ok(())
+                                }
+                                Err(e) => Err(anyhow::anyhow!(e)),
+                            }
+                        } else if let Some(s) = v.as_str() {
+                            println!("{s}");
+                            Ok(())
+                        } else {
+                            println!("{v}");
+                            Ok(())
+                        }
+                    }
+                    None => {
+                        eprintln!("[rdsh] unknown key: {key} (try: rdsh settings keys)");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            SettingsAction::Set { key, value } => {
+                let mut cfg = rdsh_config::load();
+                if let Err(e) = cfg.set_dotted(&key, &value) {
+                    Err(e)
+                } else if let Err(e) = cfg.save() {
+                    Err(e)
+                } else {
+                match cfg.get_dotted(&key) {
+                    Some(v) => {
+                        if v.is_string() {
+                            println!("{}={}", key.trim(), v.as_str().unwrap_or_default());
+                            Ok(())
+                        } else {
+                            match serde_json::to_string(&v) {
+                                Ok(text) => {
+                                    println!("{}={}", key.trim(), text);
+                                    Ok(())
+                                }
+                                Err(e) => Err(anyhow::anyhow!(e)),
+                            }
+                        }
+                    }
+                    None => Err(anyhow::anyhow!("set failed: {key}")),
+                }
+                }
+            }
+            SettingsAction::Unset { key } => {
+                let mut cfg = rdsh_config::load();
+                if let Err(e) = cfg.reset_dotted(&key) {
+                    Err(e)
+                } else if let Err(e) = cfg.save() {
+                    Err(e)
+                } else {
+                println!("reset {} (saved to {})", key.trim(), rdsh_config::settings_path());
+                Ok(())
+                }
+            }
+            SettingsAction::Keys => {
+                for k in rdsh_config::RdshSettings::keys() {
+                    println!("{k}");
+                }
+                Ok(())
+            }
         },
         Some(Commands::Context { action }) => {
             if !cfg.beta.context_engine {
                 eprintln!(
-                    "[rdsh] context engine is disabled (beta off — enable it in rdsh settings)"
+                    "[rdsh] context engine is OFF by default (experimental) — enable with: rdsh settings set beta.context_engine true"
                 );
                 std::process::exit(2);
             }
