@@ -145,10 +145,14 @@ fn scan_sessions(root: &str, project: Option<&str>) -> Vec<Session> {
     out
 }
 
-pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyhow::Result<()> {
+pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool, json: bool) -> anyhow::Result<()> {
     let root = format!("{}/sessions", dsh_home());
     if project.is_none() && std::fs::read_dir(&root).is_err() {
-        println!("# no sessions dir at {root}");
+        if json {
+            println!("{}", serde_json::json!({"sessions": [], "total": 0}));
+        } else {
+            println!("# no sessions dir at {root}");
+        }
         return Ok(());
     }
     let out = scan_sessions(&root, project.as_deref());
@@ -174,6 +178,41 @@ pub fn cmd_sessions(project: Option<String>, limit: usize, tokens: bool) -> anyh
     };
     if tokens && !zstd_cli && sizes.iter().any(|s| s.is_none()) {
         eprintln!("[rdsh] note: zstd CLI not found; `?` rows show stored-bytes/4 estimate");
+    }
+    if json {
+        let items: Vec<serde_json::Value> = shown
+            .iter()
+            .zip(sizes.iter())
+            .map(|(s, decomp)| {
+                let exact = decomp.is_some();
+                let tok = match decomp {
+                    Some(b) => Some(b / 4),
+                    None => Some(s.bytes / 4),
+                };
+                if tokens {
+                    serde_json::json!({
+                        "project": s.project,
+                        "id": s.id,
+                        "bytes": s.bytes,
+                        "mtime": s.mtime_s,
+                        "tokens": tok,
+                        "tokens_exact": exact,
+                    })
+                } else {
+                    serde_json::json!({
+                        "project": s.project,
+                        "id": s.id,
+                        "bytes": s.bytes,
+                        "mtime": s.mtime_s,
+                        "tokens": null,
+                        "tokens_exact": false,
+                    })
+                }
+            })
+            .collect();
+        println!("{}", serde_json::json!({"sessions": items, "total": total}));
+        eprintln!("[rdsh] {total} session(s), showing up to {limit}");
+        return Ok(());
     }
     use std::io::Write;
     let stdout = std::io::stdout();

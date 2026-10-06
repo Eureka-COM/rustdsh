@@ -106,6 +106,9 @@ enum Commands {
         /// Estimate tokens via zstd decompression (falls back to stored-bytes/4)
         #[arg(long = "tokens")]
         tokens: bool,
+        /// Machine-readable JSON for sidecar use
+        #[arg(long = "json")]
+        json: bool,
     },
     /// List local profiles (Node-free)
     Profiles,
@@ -322,10 +325,12 @@ fn main() {
             project,
             limit,
             tokens,
+            json,
         }) => inspect::cmd_sessions(
             project,
             limit.unwrap_or(cfg.sessions.limit),
             tokens || cfg.sessions.with_tokens,
+            json,
         ),
         Some(Commands::Profiles) => inspect::cmd_profiles(),
         Some(Commands::Skills) => inspect::cmd_skills(),
