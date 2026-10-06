@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 
 export const inject = ['webServer'];
 
@@ -226,7 +226,9 @@ export function apply(ctx, config) {
           return;
         }
         const cfg = await loadSettings();
-        json(res, 200, { ok: true, config: cfg });
+        let legacyPresent = false;
+        try { await access(cfgPath()); legacyPresent = true; } catch (e) {}
+        json(res, 200, { ok: true, config: cfg, legacy_present: legacyPresent });
       },
     });
     const offPostSettings = ctx.webServer.register({
