@@ -95,6 +95,7 @@ fn list_dir(dir: &str, kind: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
 struct Session {
     project: String,
     id: String,
@@ -170,14 +171,18 @@ pub fn cmd_sessions(
     // NOTE: decompressed sizes feed only the tokens column (tokens set).
     // Otherwise the result is ignored, so skip all size work entirely.
     let sizes: Vec<Option<u64>> = if tokens {
-        if shown.len() >= 2 {
-            batch_decompressed(&root, &shown, zstd_cli)
+        // Content-keyed cache: repeat views skip re-decompression.
+        let mut cache = TokensCache::load();
+        let out = if shown.len() >= 2 {
+            batch_decompressed(&root, &shown, zstd_cli, &mut cache)
         } else {
             shown
                 .iter()
-                .map(|s| session_decompressed_bytes(&root, &s.project, &s.id, zstd_cli))
+                .map(|s| session_decompressed_bytes(&root, s, zstd_cli, &mut cache))
                 .collect()
-        }
+        };
+        cache.save();
+        out
     } else {
         vec![None; shown.len()]
     };
@@ -319,25 +324,160 @@ fn subprocess_width() -> usize {
     (parallelism() * 4).clamp(8, 32)
 }
 
-fn batch_decompressed(root: &str, shown: &[&Session], zstd_cli: bool) -> Vec<Option<u64>> {
+/// Content-keyed cache for decompressed session sizes.
+///
+/// Session logs only grow, so `(mtime_ms, stored_bytes)` identifies the
+/// content: repeat views (a desktop sidecar polling `sessions --tokens`)
+/// skip re-decompression entirely. Best-effort file cache — any error
+/// means recompute, never a wrong value. `RDSH_TOKENS_CACHE=0` disables it.
+struct TokensCache {
+    path: Option<String>,
+    map: std::collections::HashMap<String, (u64, u64, Option<u64>)>,
+    dirty: bool,
+}
+
+impl TokensCache {
+    fn key(root: &str, project: &str, id: &str) -> String {
+        format!("{root}/{project}/{id}")
+    }
+
+    fn path() -> Option<String> {
+        if std::env::var("RDSH_TOKENS_CACHE").as_deref() == Ok("0") {
+            return None;
+        }
+        let base = std::env::var("XDG_CACHE_HOME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| home_dir().map(|h| format!("{h}/.cache")))?;
+        Some(format!("{base}/rdsh/sessions-tokens.json"))
+    }
+
+    fn load() -> Self {
+        let path = Self::path();
+        let mut map = std::collections::HashMap::new();
+        if let Some(p) = path.as_deref() {
+            if let Ok(text) = std::fs::read_to_string(p) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(obj) = v.as_object() {
+                        for (k, e) in obj {
+                            // Cap on load so a foreign huge file stays harmless.
+                            if map.len() >= 2000 {
+                                break;
+                            }
+                            let m = e.get("mtime").and_then(|x| x.as_u64()).unwrap_or(0);
+                            let b = e.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0);
+                            let d = e.get("decomp").and_then(|x| x.as_u64());
+                            map.insert(k.clone(), (m, b, d));
+                        }
+                    }
+                }
+            }
+        }
+        TokensCache {
+            path,
+            map,
+            dirty: false,
+        }
+    }
+
+    /// Cache hit returns the stored result (which may itself be `None`
+    /// for unresolvable sessions); key mismatch means recompute.
+    fn get(&self, key: &str, mtime: u64, bytes: u64) -> Option<Option<u64>> {
+        match self.map.get(key) {
+            Some((m, b, d)) if *m == mtime && *b == bytes => Some(*d),
+            _ => None,
+        }
+    }
+
+    fn put(&mut self, key: &str, mtime: u64, bytes: u64, decomp: Option<u64>) {
+        if self.path.is_none() {
+            return;
+        }
+        self.map.insert(key.to_string(), (mtime, bytes, decomp));
+        self.dirty = true;
+    }
+
+    fn save(&self) {
+        let Some(p) = self.path.as_deref() else {
+            return;
+        };
+        if !self.dirty {
+            return;
+        }
+        // Deterministic cap: sorted keys, first 1000.
+        let mut keys: Vec<&String> = self.map.keys().collect();
+        keys.sort();
+        let mut obj = serde_json::Map::new();
+        for k in keys.into_iter().take(1000) {
+            if let Some((m, b, d)) = self.map.get(k) {
+                obj.insert(
+                    k.clone(),
+                    serde_json::json!({"mtime": m, "bytes": b, "decomp": d}),
+                );
+            }
+        }
+        let text = serde_json::Value::Object(obj).to_string();
+        if let Some(parent) = std::path::Path::new(p).parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        // Atomic replace so concurrent readers never see a torn file.
+        let tmp = format!("{p}.tmp");
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, p);
+        }
+    }
+}
+
+fn batch_decompressed(
+    root: &str,
+    shown: &[&Session],
+    zstd_cli: bool,
+    cache: &mut TokensCache,
+) -> Vec<Option<u64>> {
     let mut out: Vec<Option<u64>> = vec![None; shown.len()];
+    // Serial cache pass first: hits never touch threads or IO.
+    let mut pending: Vec<(usize, Session)> = vec![];
+    for (i, sess) in shown.iter().enumerate() {
+        let key = TokensCache::key(root, &sess.project, &sess.id);
+        match cache.get(&key, sess.mtime, sess.bytes) {
+            Some(hit) => out[i] = hit,
+            None => pending.push((i, (*sess).clone())),
+        }
+    }
+    if pending.is_empty() {
+        return out;
+    }
     let width = subprocess_width();
-    for (base, chunk) in shown.chunks(width).enumerate() {
+    let mut done: Vec<(usize, Option<u64>)> = vec![];
+    for chunk in pending.chunks(width) {
         std::thread::scope(|s| {
             let mut handles = vec![];
-            for (j, sess) in chunk.iter().enumerate() {
+            for (i, sess) in chunk {
                 let root = root.to_string();
-                let proj = sess.project.clone();
-                let id = sess.id.clone();
+                let (proj, id) = (sess.project.clone(), sess.id.clone());
                 handles.push((
-                    j,
-                    s.spawn(move || session_decompressed_bytes(&root, &proj, &id, zstd_cli)),
+                    *i,
+                    s.spawn(move || {
+                        session_decompressed_bytes_uncached(&root, &proj, &id, zstd_cli)
+                    }),
                 ));
             }
-            for (j, h) in handles {
-                out[base * width + j] = h.join().unwrap_or(None);
+            for (i, h) in handles {
+                done.push((i, h.join().unwrap_or(None)));
             }
         });
+    }
+    for (i, r) in done {
+        let sess = &shown[i];
+        cache.put(
+            &TokensCache::key(root, &sess.project, &sess.id),
+            sess.mtime,
+            sess.bytes,
+            r,
+        );
+        out[i] = r;
     }
     out
 }
@@ -353,7 +493,29 @@ fn zstd_available() -> bool {
 /// Exact decompressed byte total for one session: std-only frame headers
 /// first, streaming `zstd -dc` only for files whose frames omit the size.
 /// Returns None when no `.zstd` file yielded a size (same `?` set as before).
-fn session_decompressed_bytes(root: &str, project: &str, id: &str, zstd_cli: bool) -> Option<u64> {
+/// Cached entry point: content-keyed by `(mtime_ms, stored_bytes)`, so only
+/// grown sessions pay for re-decompression.
+fn session_decompressed_bytes(
+    root: &str,
+    sess: &Session,
+    zstd_cli: bool,
+    cache: &mut TokensCache,
+) -> Option<u64> {
+    let key = TokensCache::key(root, &sess.project, &sess.id);
+    if let Some(hit) = cache.get(&key, sess.mtime, sess.bytes) {
+        return hit;
+    }
+    let r = session_decompressed_bytes_uncached(root, &sess.project, &sess.id, zstd_cli);
+    cache.put(&key, sess.mtime, sess.bytes, r);
+    r
+}
+
+fn session_decompressed_bytes_uncached(
+    root: &str,
+    project: &str,
+    id: &str,
+    zstd_cli: bool,
+) -> Option<u64> {
     let dir = std::path::Path::new(root).join(project).join(id);
     let entries = std::fs::read_dir(dir).ok()?;
     let mut total = 0u64;
@@ -377,12 +539,29 @@ fn session_decompressed_bytes(root: &str, project: &str, id: &str, zstd_cli: boo
         if !zstd_cli {
             return None;
         }
-        // Same skip set as the old per-file `zstd -dc`: unreadable files
-        // are skipped, they only force `?` when nothing else resolved.
-        for p in &deferred {
-            if let Some(n) = stream_decompressed_bytes(p) {
-                total += n;
-                any = true;
+        // One spawn per session over the readable deferred files: byte sums
+        // are order-independent, so this matches the old per-file totals
+        // while paying spawn latency once. Unreadable files are skipped up
+        // front (as before); a nonzero exit falls back to the per-file loop
+        // so corrupt content resolves exactly like it used to.
+        let readable: Vec<&std::path::PathBuf> = deferred
+            .iter()
+            .filter(|p| std::fs::File::open(p).is_ok())
+            .collect();
+        if !readable.is_empty() {
+            match stream_many_decompressed_bytes(&readable) {
+                Some(n) => {
+                    total += n;
+                    any = true;
+                }
+                None => {
+                    for p in &deferred {
+                        if let Some(n) = stream_decompressed_bytes(p) {
+                            total += n;
+                            any = true;
+                        }
+                    }
+                }
             }
         }
     }
@@ -398,6 +577,12 @@ fn session_decompressed_bytes(root: &str, project: &str, id: &str, zstd_cli: boo
 /// sequence of frames — the caller then streams `zstd -dc` instead.
 fn zstd_frame_content_size(path: &std::path::Path) -> Option<u64> {
     const MAGIC: u32 = 0xFD2F_B528;
+    // Prefix sniff first: session logs are streaming-written with the size
+    // omitted, so most files are decided from the first frame header alone
+    // instead of reading megabytes just to discard them.
+    if first_frame_denies_size(path) {
+        return None;
+    }
     let bytes = std::fs::read(path).ok()?;
     let mut pos = 0usize;
     let mut total = 0u64;
@@ -518,6 +703,67 @@ fn zstd_frame_content_size(path: &std::path::Path) -> Option<u64> {
     Some(total)
 }
 
+/// First-frame prefix sniff (<=32 bytes): reports true only for cases the
+/// full walk below also rejects — non-zstd magic, reserved descriptor bit,
+/// or an omitted frame content size. Anything indecisive (short/truncated
+/// prefix, skippable first frame) returns false so the full walk decides.
+/// Output-identical by construction: it only shortcuts definite rejections.
+fn first_frame_denies_size(path: &std::path::Path) -> bool {
+    const MAGIC: u32 = 0xFD2F_B528;
+    let prefix: Vec<u8> = match std::fs::File::open(path) {
+        Ok(mut f) => {
+            use std::io::Read;
+            let mut buf = [0u8; 32];
+            let mut n = 0usize;
+            while n < buf.len() {
+                match f.read(&mut buf[n..]) {
+                    Ok(0) => break,
+                    Ok(k) => n += k,
+                    Err(_) => return false,
+                }
+            }
+            buf[..n].to_vec()
+        }
+        Err(_) => return false,
+    };
+    if prefix.len() < 5 {
+        return false; // tiny file: full walk decides (cheap anyway)
+    }
+    let magic = u32::from_le_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
+    if magic != MAGIC {
+        // A non-skippable first frame is rejected by the full walk too.
+        if prefix.len() >= 8 && magic & 0xFFFF_FFF0 != 0x184D_2A50 {
+            return true;
+        }
+        return false;
+    }
+    let desc = prefix[4];
+    if desc & 0x08 != 0 {
+        return true; // reserved bit: full walk rejects
+    }
+    let fcs_flag = desc >> 6;
+    let single = desc >> 5 & 1 == 1;
+    let dict_len = match desc & 0x03 {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
+    let fcs_len = match (fcs_flag, single) {
+        (0, true) => 1,
+        (0, false) => 0,
+        (1, _) => 2,
+        (2, _) => 4,
+        _ => 8,
+    };
+    // First header needs magic(4) + desc(1) + window(0/1) + dict + fcs.
+    let head = 4 + 1 + usize::from(!single) + dict_len + fcs_len;
+    if prefix.len() < head {
+        return false; // truncated header: full walk decides
+    }
+    fcs_len == 0 // omitted size: full walk hits `fcs?` -> None
+}
+
 /// Streaming `zstd -dc` byte count with O(1) memory: the pipe is pumped in
 /// 64 KiB chunks instead of buffering the whole output (old `.output()`).
 fn stream_decompressed_bytes(path: &std::path::Path) -> Option<u64> {
@@ -526,6 +772,44 @@ fn stream_decompressed_bytes(path: &std::path::Path) -> Option<u64> {
         .arg("-dc")
         .arg("--")
         .arg(path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut total = 0u64;
+    let mut buf = [0u8; 65536];
+    if let Some(mut out) = child.stdout.take() {
+        loop {
+            match out.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => total += n as u64,
+                Err(_) => {
+                    let _ = child.wait();
+                    return None;
+                }
+            }
+        }
+    }
+    if child.wait().ok()?.success() {
+        Some(total)
+    } else {
+        None
+    }
+}
+
+/// Batched `zstd -dc` over several files: one spawn, concatenated output.
+/// Byte sums are order-independent, so the total matches looping
+/// `stream_decompressed_bytes` per file. `None` on empty input, spawn
+/// failure, or nonzero exit (caller falls back to the per-file loop).
+fn stream_many_decompressed_bytes(paths: &[&std::path::PathBuf]) -> Option<u64> {
+    use std::io::Read;
+    if paths.is_empty() {
+        return None;
+    }
+    let mut child = std::process::Command::new("zstd")
+        .arg("-dc")
+        .arg("--")
+        .args(paths.iter().map(|p| p.as_path()))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
