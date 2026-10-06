@@ -780,6 +780,11 @@ fn node_wrapper_warnings(shadowed: bool) -> Vec<String> {
             if !path.is_file() {
                 continue;
             }
+            // Size-gate before reading: ~/.local/bin can hold huge binaries and
+            // reading them fully just to discard costs seconds in `doctor`.
+            if std::fs::metadata(&path).map(|m| m.len() > 65536).unwrap_or(false) {
+                continue;
+            }
             let bytes = std::fs::read(&path).unwrap_or_default();
             if bytes.len() > 65536 || bytes.contains(&0) {
                 continue;
