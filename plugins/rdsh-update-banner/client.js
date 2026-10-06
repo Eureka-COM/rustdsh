@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
     const useState = React.useState;
     const useEffect = React.useEffect;
     const useCallback = React.useCallback;
+    const useRef = React.useRef;
     const ENDPOINT = "/api/rdsh-update";
     const CSS = ".rub-wrap{position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:900;" +
       "width:min(400px,calc(100vw - 24px));box-sizing:border-box;" +
@@ -57,12 +58,18 @@ window.__ModuleLoader__.load({
       const resPair = useState("");
       const result = resPair[0];
       const setResult = resPair[1];
+      // Dismissed update key (to + at). Reset on page reload by design:
+      // the same update never reappears, a newer one does.
+      const dismissedRef = useRef(null);
+      const updateKey = (j) => ((j && j.to) || "") + "@" + ((j && j.at) || "");
       const load = useCallback(async () => {
         try {
           const r = await fetch(ENDPOINT, { cache: "no-store" });
           if (!r.ok) return;
           const j = await r.json();
-          if (j && j.ok) setData(j);
+          if (!j || !j.ok) return;
+          if (j.updated && dismissedRef.current === updateKey(j)) return;
+          setData(j);
         } catch (e) {}
       }, []);
       useEffect(() => {
@@ -70,9 +77,8 @@ window.__ModuleLoader__.load({
         const t = setInterval(load, 60000);
         return () => clearInterval(t);
       }, [load]);
-      // Session-scoped dismiss: every page load shows the banner again
-      // while an update is recorded (no persistent ack).
       const dismiss = () => {
+        if (data) dismissedRef.current = updateKey(data);
         setData({ ok: true, updated: false });
       };
       const runUpdate = useCallback(async () => {
