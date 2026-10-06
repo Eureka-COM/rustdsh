@@ -37,6 +37,11 @@ import {
   validateBudgetAdmission,
   publicBudgetAdmission,
 } from "./budget-admission.mjs";
+import {
+  restoreHistoryBackup,
+  validateRestoredHistory,
+  validateHistoryConflicts,
+} from "./history-backup.mjs";
 
 // Bucket D display notes (no schema change; schema stays 1):
 // #12 task contract, #13 review inbox, #14 outcome cards, #15 dependencies.
@@ -93,6 +98,14 @@ export class ProjectStore {
   constructor(project, value) {
     this.project = project;
     this.value = value;
+    this.historyIds = validateRestoredHistory(value);
+    this.protectedHistory = freezeHistory(value.history_backups);
+  }
+  clone() {
+    const { history_backups, ...value } = this.value;
+    const next = structuredClone(value);
+    if (history_backups !== undefined) next.history_backups = history_backups;
+    return next;
   }
   static async open(project) {
     let value;
@@ -126,14 +139,14 @@ export class ProjectStore {
     return new ProjectStore(project, value);
   }
   async mutate(operation, input) {
-    const next = structuredClone(this.value);
+    const next = this.clone();
     applyOperation(next, operation, input);
     validateInstructions(next);
     validateCostLedger(next);
     return this.commit(next, operation, input);
   }
   async mutateReply(operation, input, context) {
-    const next = structuredClone(this.value);
+    const next = this.clone();
     const handlers = {
       register: registerReplyConsumer,
       ack: applyReplyAck,
@@ -148,6 +161,11 @@ export class ProjectStore {
     return structuredClone(result);
   }
   async commit(next, operation = null, input = {}) {
+    const historyChanged = next.history_backups !== this.protectedHistory;
+    const historyIds = historyChanged
+      ? validateRestoredHistory(next)
+      : this.historyIds;
+    validateHistoryConflicts(next, historyIds);
     next.revision++;
     next.updated_at = new Date().toISOString();
     const names = {
@@ -180,15 +198,37 @@ export class ProjectStore {
       next.changes = next.changes.slice(-10000);
     }
     await writeJson(path.join(this.project.directory, "state.json"), next);
+    if (historyChanged) {
+      this.protectedHistory = freezeHistory(next.history_backups);
+      this.historyIds = historyIds;
+    }
     this.value = next;
     return next;
   }
   async mutateBudget(operation, input) {
-    const next = structuredClone(this.value);
+    const next = this.clone();
     const result = applyBudgetOperation(next, operation, input);
     await this.commit(next);
     return structuredClone(result);
   }
+  async restoreBackup(input, evidenceIds, acceptanceTaskIds) {
+    const next = structuredClone(this.value);
+    const result = restoreHistoryBackup(
+      next,
+      input,
+      evidenceIds,
+      acceptanceTaskIds,
+    );
+    await this.commit(next);
+    return { ...result, revision: next.revision };
+  }
+}
+function freezeHistory(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freezeHistory(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 export function publicState(value, observations, deliveries, budgetJobs) {
   const { changes, ...visible } = value;

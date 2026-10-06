@@ -14,6 +14,8 @@ import { EventsHub } from "./webhooks.mjs";
 import { modernMcpHandler } from "./mcp2.mjs";
 import { AnswerApplicationServer } from "./answer-application-server.mjs";
 import { BudgetAdmissionServer } from "./budget-server.mjs";
+import { createHistoryBackup, backupMaximum } from "./history-backup.mjs";
+import { AcceptanceStore } from "./acceptance.mjs";
 import {
   ConnectionObservations,
   connectionReport,
@@ -30,12 +32,12 @@ function json(res, status, value) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(value));
 }
-async function readBody(req) {
+async function readBody(req, maximum = 131072) {
   let size = 0,
     chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 131072) throw new Error("Request body too large");
+    if (size > maximum) throw new Error("Request body too large");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -305,6 +307,47 @@ export async function startDashboard(options) {
     updateQueue = task.catch(() => {});
     return task;
   }
+  async function backupOperation(action, input) {
+    const task = updateQueue.then(async () => {
+      if (action === "history") {
+        if (Object.keys(input).length)
+          throw new Error("History takes no input");
+        return {
+          project_id: project.id,
+          revision: store.value.revision,
+          history_backups: structuredClone(store.value.history_backups || []),
+        };
+      }
+      const acceptance = await (await AcceptanceStore.open(project)).read();
+      if (action === "preview") {
+        if (
+          !input ||
+          typeof input !== "object" ||
+          Array.isArray(input) ||
+          !Object.hasOwn(input, "selection") ||
+          Object.keys(input).some((k) => !["selection", "review"].includes(k))
+        )
+          throw new Error("Invalid backup preview fields");
+        return createHistoryBackup(
+          store.value,
+          acceptance,
+          input.selection,
+          input.review,
+        );
+      }
+      const result = await store.restoreBackup(
+        input,
+        acceptance.evidence.map((r) => r.evidence_id),
+        acceptance.tasks.map((r) => r.id),
+      );
+      for (const response of live)
+        response.write(`event: changed\ndata: ${store.value.revision}\n\n`);
+      for (const { mcp } of sessions.values()) void mcp.notify();
+      return result;
+    });
+    updateQueue = task.catch(() => {});
+    return task;
+  }
   const server = http.createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
     res.setHeader("referrer-policy", "no-referrer");
@@ -508,6 +551,28 @@ export async function startDashboard(options) {
         return res.end(svg);
       }
       if (kind === "project") {
+        if (req.method === "POST" && route?.startsWith("/api/backup/")) {
+          if (
+            !adminAuthorized ||
+            !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
+              req.socket.remoteAddress,
+            )
+          )
+            return json(res, 403, {
+              error: "Backup requires the local administrator credential",
+            });
+          const action = route.slice("/api/backup/".length);
+          if (!["preview", "restore", "history"].includes(action))
+            return json(res, 404, { error: "Unknown backup operation" });
+          return json(
+            res,
+            200,
+            await backupOperation(
+              action,
+              await readBody(req, backupMaximum + 65536),
+            ),
+          );
+        }
         if (req.method === "POST" && route?.startsWith("/api/budget/")) {
           if (
             !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(

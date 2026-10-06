@@ -21,6 +21,12 @@ import { ReplyConsumer } from "./reply-consumer.mjs";
 import { instructionRequest } from "./instruction-client.mjs";
 import { costRequest } from "./cost-client.mjs";
 import { budgetRequest } from "./budget-client.mjs";
+import { backupRequest } from "./backup-client.mjs";
+import {
+  readBackupJson,
+  writeHistoryBackup,
+  backupInspection,
+} from "./backup-files.mjs";
 import { allInputCommands } from "./instruction-queue.mjs";
 import { ProjectStore, publicState } from "./state.mjs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -55,6 +61,11 @@ rdsh-dashboard cost-ledger declare|report --project <directory> --input-file <js
 rdsh-dashboard cost-ledger inspect --project <directory>
 rdsh-dashboard budget policy|usage --project <directory> --input-file <json>
 rdsh-dashboard budget inspect --project <directory>
+rdsh-dashboard backup preview|export --project <directory> --selection-file <json> [--review-file <json>] [--output-file <new-json>]
+rdsh-dashboard backup inspect --archive-file <json>
+rdsh-dashboard backup restore --project <directory> --archive-file <json> --expected-revision <n>
+rdsh-dashboard backup history --project <directory>
+rdsh-dashboard backup export --project <directory> --archive-id <backup_id> --output-file <new-json>
 rdsh-dashboard session-ledger start|resume --budget-guard --worker-id <id> --project <directory> --executable <original-dsh> [--entrypoint <bin.js>] [--run-id <id>]
 rdsh-dashboard reply-consumer once|serve --budget-guard --worker-id <id> --project <directory> --run-id <id> --executable <original-dsh> [--entrypoint <bin.js>]
 
@@ -110,6 +121,12 @@ const { values, positionals } = parseArgs({
     "input-file": { type: "string" },
     "budget-guard": { type: "boolean" },
     "worker-id": { type: "string" },
+    "selection-file": { type: "string" },
+    "review-file": { type: "string" },
+    "archive-file": { type: "string" },
+    "output-file": { type: "string" },
+    "expected-revision": { type: "string" },
+    "archive-id": { type: "string" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -157,6 +174,18 @@ async function localJson(file) {
 }
 try {
   const command = positionals[0];
+  if (
+    command !== "backup" &&
+    [
+      "selection-file",
+      "review-file",
+      "archive-file",
+      "output-file",
+      "expected-revision",
+      "archive-id",
+    ].some((k) => values[k] !== undefined)
+  )
+    throw new Error("Backup options require backup");
   if (
     values["budget-guard"] !== undefined ||
     values["worker-id"] !== undefined
@@ -214,6 +243,77 @@ try {
     throw new Error("Model route options require routing");
   if (values.help || !command) {
     console.log(help);
+  } else if (command === "backup") {
+    const action = positionals[1];
+    const optionSets = {
+      preview: ["project", "selection-file", "review-file"],
+      export: [
+        "project",
+        "selection-file",
+        "review-file",
+        "output-file",
+        "archive-id",
+      ],
+      inspect: ["archive-file"],
+      restore: ["project", "archive-file", "expected-revision"],
+      history: ["project"],
+    };
+    if (
+      positionals.length !== 2 ||
+      !Object.hasOwn(optionSets, action) ||
+      Object.keys(values).some((k) => !optionSets[action].includes(k))
+    )
+      throw new Error("Invalid backup action/options");
+    let result;
+    if (action === "inspect") {
+      if (!values["archive-file"]) throw new Error("Specify --archive-file");
+      result = backupInspection(await readBackupJson(values["archive-file"]));
+    } else {
+      const project = await identity(values.project || process.cwd());
+      if (action === "export" && values["archive-id"]) {
+        if (
+          values["selection-file"] ||
+          values["review-file"] ||
+          !values["output-file"]
+        )
+          throw new Error(
+            "Re-export requires --archive-id and --output-file only",
+          );
+        const history = await backupRequest(project, "history");
+        const archive = history.history_backups.find(
+          (e) => e.archive.archive_id === values["archive-id"],
+        )?.archive;
+        if (!archive) throw new Error("Restored archive not found");
+        result = await writeHistoryBackup(values["output-file"], archive);
+      } else if (["preview", "export"].includes(action)) {
+        if (
+          !values["selection-file"] ||
+          (action === "export" && !values["output-file"])
+        )
+          throw new Error("Specify --selection-file and export --output-file");
+        const archive = await backupRequest(project, "preview", {
+          selection: await readBackupJson(values["selection-file"]),
+          ...(values["review-file"]
+            ? { review: await readBackupJson(values["review-file"]) }
+            : {}),
+        });
+        result =
+          action === "export"
+            ? await writeHistoryBackup(values["output-file"], archive)
+            : backupInspection(archive);
+      } else if (action === "restore") {
+        if (
+          !values["archive-file"] ||
+          !/^\d+$/.test(values["expected-revision"] || "")
+        )
+          throw new Error("Specify --archive-file and --expected-revision");
+        result = await backupRequest(project, "restore", {
+          archive: await readBackupJson(values["archive-file"]),
+          expected_revision: Number(values["expected-revision"]),
+        });
+      } else result = await backupRequest(project, "history");
+    }
+    console.log(JSON.stringify(result, null, 2));
   } else if (command === "cost-ledger") {
     const action = positionals[1],
       allowed = new Set(["project", "input-file", "help"]);

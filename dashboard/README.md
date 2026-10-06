@@ -286,6 +286,17 @@ Tunnel/MCP/callback stages separately. The
 restart detection and stage-specific recovery. Local readiness and callback
 receipt leave actual Dot response and end-to-end status unconfirmed.
 
+## Selective history backup
+
+`backup preview|export|inspect|restore|history` selects task/answer/decision/evidence
+history, holds all source prose by default, and restores a separate historical
+collection using the target dashboard's own authentication. Reviewed replacement
+text can be supplied explicitly; active commands, credentials and event
+subscriptions are never transported. See the
+[history backup contract](../docs/HISTORY-BACKUP.md) for selection, review and
+collision handling. `backup history` exposes imported records through the local
+control CLI; the existing state resource also includes `history_backups`.
+
 ## Validation
 
 ```sh
