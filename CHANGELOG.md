@@ -5,6 +5,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-06
+
+### Changed
+
+- `sessions --tokens` reuses decompressed sizes from a content-keyed cache
+  (`~/.cache/rdsh/sessions-tokens.json`, `RDSH_TOKENS_CACHE=0` disables it);
+  repeat views drop from ~0.7s to ~5ms with byte-identical values.
+- Deferred `.zstd` files stream through one `zstd` call per session and skip
+  the wasted full-file header walk via a first-frame sniff.
+
 ## [0.1.4] - 2026-10-06
 
 ### Added
@@ -66,7 +76,8 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 - Floating setup UI, dsh-default detection, SearXNG search.
 - Installers: install.sh (Linux/macOS/WSL), install.ps1 (Windows).
 
-[Unreleased]: https://github.com/sahenjp/rustdsh/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/sahenjp/rustdsh/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/sahenjp/rustdsh/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/sahenjp/rustdsh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/sahenjp/rustdsh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/sahenjp/rustdsh/releases/tag/v0.1.2
