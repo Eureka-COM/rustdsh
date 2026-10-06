@@ -9,14 +9,15 @@ publication, billing, model request or native agent operation was performed.
 
 ## Observed behavior
 
-| Situation | Before | After |
-| --- | --- | --- |
-| Reference/default action on a consultation | Inferred approval badge | Consultation; no execution authority |
-| Choices, target revision, diff, cost and impact | Free text only | Structured context in the same card |
-| Action or cost changed while drafting | No versioned question contract | New revision; old selection cleared; review required |
-| Saved answer to a superseded revision | No target binding | Original retained; validity becomes invalidated |
-| Expiry or cancellation | No typed lifecycle | Disabled response; HTTP 409 on stale submission |
-| Unrelated SSE update | Draft/focus preserved | Draft, choice, focus and selection preserved |
+| Situation                                           | Before                                    | After                                                |
+| --------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------- |
+| Reference/default action on a consultation          | Inferred approval badge                   | Consultation; no execution authority                 |
+| Choices, target revision, diff, cost and impact     | Free text only                            | Structured context in the same card                  |
+| Action or cost changed while drafting               | No versioned question contract            | New revision; old selection cleared; review required |
+| Saved answer to a superseded revision               | No target binding                         | Original retained; validity becomes invalidated      |
+| Answered content A changed to B, then restored to A | Older revision could appear current again | Revision and fingerprint must both match             |
+| Expiry or cancellation                              | No typed lifecycle                        | Disabled response; HTTP 409 on stale submission      |
+| Unrelated SSE update                                | Draft/focus preserved                     | Draft, choice, focus and selection preserved         |
 
 The actual browser observation in
 [browser-observations.json](question-contracts/browser-observations.json)
@@ -33,6 +34,13 @@ in the original feedback and appeared in the visible invalidated-answer history.
 The [server observation](question-contracts/revision-fixture.json) includes
 the retained answer, target revision and invalidation reason without runtime
 credentials, private project paths or environment values.
+
+The follow-up [before/after output](question-contracts/restored-revision.json)
+calls the original `fc6cae9` and corrected validity functions with the same
+synthetic view input: revision 3 has restored revision 1's content. The old
+answer now stays invalidated while the revision-3 answer remains current.
+The persistence regression also creates, revises and answers real typed cards,
+then reopens the store to verify that the original answer remains unchanged.
 
 ## Real PNG captures and GIF
 
@@ -55,10 +63,10 @@ tested separately.
 
 ## Validation
 
-Windows Node 24.18.0 and WSL/Linux Node 24.21.0 each passed all **121** dashboard
-tests, including six new contract/HTTP tests. They cover legacy compatibility,
+Windows Node 22.23.3 and WSL/Linux Node 24.21.0 each passed all **122** dashboard
+tests, including seven new contract/HTTP tests. They cover legacy compatibility,
 typed persistence, action/cost revision races, original feedback retention,
-stale fingerprint rejection, cancellation/expiry, malformed metadata preserved
+stale fingerprint rejection, restored content at a new revision, cancellation/expiry, malformed metadata preserved
 on disk, MCP/admin answer rejection, host/origin rejection and simultaneous human
 answers producing one feedback record. HTTP and stdio MCP retain six tools.
 

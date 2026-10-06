@@ -399,6 +399,7 @@ export function feedbackValidity(state, message) {
   if (!message.contract_fingerprint) return message;
   const card = state.question_contracts?.cards[message.question_id];
   const valid =
+    card?.revision === message.contract_revision &&
     card?.fingerprint === message.contract_fingerprint &&
     contractStatus(card) === "answered";
   return {
@@ -406,7 +407,8 @@ export function feedbackValidity(state, message) {
     contract_validity: valid ? "current" : "invalidated",
     invalidation_reason: valid
       ? null
-      : card?.fingerprint !== message.contract_fingerprint
+      : card?.revision !== message.contract_revision ||
+          card?.fingerprint !== message.contract_fingerprint
         ? "question_contract_changed"
         : contractStatus(card),
     execution_authorized: false,
