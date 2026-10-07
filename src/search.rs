@@ -67,9 +67,8 @@ enum EntryKind {
 }
 
 /// Classify without stat in the common case (dirent type is free).
-/// Symlinks and unknown types fall back to stat, matching the old
-/// follow-links behavior exactly.
-fn entry_kind(e: &std::fs::DirEntry, p: &std::path::Path, name: &str) -> EntryKind {
+/// Skip symlinks and unknown types to keep repository traversal local.
+fn entry_kind(e: &std::fs::DirEntry, _p: &std::path::Path, name: &str) -> EntryKind {
     match e.file_type() {
         Ok(t) if t.is_dir() => {
             if SKIP.contains(&name) || name.starts_with(".") {
@@ -79,19 +78,9 @@ fn entry_kind(e: &std::fs::DirEntry, p: &std::path::Path, name: &str) -> EntryKi
             }
         }
         Ok(t) if t.is_file() => EntryKind::File,
-        _ => {
-            if p.is_dir() {
-                if SKIP.contains(&name) || name.starts_with(".") {
-                    EntryKind::Skip
-                } else {
-                    EntryKind::Dir
-                }
-            } else if p.is_file() {
-                EntryKind::File
-            } else {
-                EntryKind::Skip
-            }
-        }
+        // Repository-controlled links must not disclose files outside the search root
+        // or recurse through cycles. Unknown types also fail closed.
+        _ => EntryKind::Skip,
     }
 }
 
@@ -258,6 +247,27 @@ mod tests {
     fn worker_cap() {
         // Issue #85-4: walker/grep threads follow cores, clamped 1..=8.
         assert!((1..=8).contains(&crate::inspect::parallelism()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_search_does_not_follow_repository_symlinks() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "rdsh-search-{}",
+            crate::local_http::random_token().unwrap()
+        ));
+        let repo = root.join("repo");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("credentials.json"), "DUMMY_SECRET").unwrap();
+        std::fs::write(repo.join("README.md"), "safe").unwrap();
+        symlink(&outside, repo.join("linked-dir")).unwrap();
+        symlink(outside.join("credentials.json"), repo.join("linked.json")).unwrap();
+        let files = collect_parallel(&repo);
+        assert_eq!(files, vec![repo.join("README.md")]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

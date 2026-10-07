@@ -20,7 +20,7 @@ for a in "$@"; do
   esac
 done
 LOGDIR="${HOME}/.local/share/rdsh"
-LOCK="/tmp/rdsh-sync.lock"
+LOCK="$LOGDIR/sync.lock"
 mkdir -p "$LOGDIR"
 log() { printf "%s %s\n" "$(date -u +%FT%TZ)" "$*" | tee -a "$LOGDIR/sync.log"; }
 if command -v flock >/dev/null 2>&1; then
@@ -74,7 +74,7 @@ sandboxed_regress() {
   # Run regress with a throwaway HOME/DSH_HOME (issue #85 item 8).
   sb="$(mktemp -d 2>/dev/null || mktemp -d -t rdsh-sync-regress)"
   mkdir -p "$sb/home" "$sb/dsh"
-  if HOME="$sb/home" DSH_HOME="$sb/dsh" BIN="$1" sh "$REPO/tests/regress.sh" >> "$LOGDIR/sync.log" 2>&1; then
+  if env -i PATH="$PATH" HOME="$sb/home" DSH_HOME="$sb/dsh" BIN="$1" sh "$REPO/tests/regress.sh" >> "$LOGDIR/sync.log" 2>&1; then
     rc=0
   else
     rc=1
@@ -113,6 +113,27 @@ fetch_rdsh_release() {
   tmpd="$(mktemp -d 2>/dev/null || mktemp -d -t rdsh-sync-fetch)"
   log "fetching rdsh release: $url"
   if ! curl -fsSL -o "$tmpd/pkg.tgz" "$url"; then rm -rf "$tmpd"; return 1; fi
+  if ! curl -fsSL -o "$tmpd/checksum" "$url.sha256"; then
+    log "missing release checksum; refusing update"
+    rm -rf "$tmpd"; return 1
+  fi
+  expected="$(awk 'NR==1 { print $1 }' "$tmpd/checksum" | tr 'A-F' 'a-f')"
+  if ! printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
+    log "invalid release checksum; refusing update"
+    rm -rf "$tmpd"; return 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmpd/pkg.tgz" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$tmpd/pkg.tgz" | awk '{print $1}')"
+  else
+    log "no SHA-256 verifier; refusing update"
+    rm -rf "$tmpd"; return 1
+  fi
+  if [ "$expected" != "$actual" ]; then
+    log "release checksum mismatch; refusing update"
+    rm -rf "$tmpd"; return 1
+  fi
   if ! tar -xzf "$tmpd/pkg.tgz" -C "$tmpd"; then rm -rf "$tmpd"; return 1; fi
   if [ ! -x "$tmpd/rdsh" ]; then rm -rf "$tmpd"; return 1; fi
   install -m755 "$tmpd/rdsh" "$dest"
