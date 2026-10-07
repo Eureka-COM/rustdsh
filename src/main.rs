@@ -389,10 +389,10 @@ fn main() {
                         std::fs::read_to_string(rdsh_config::settings_path())
                             .ok()
                             .and_then(|text| serde_json::from_str(&text).ok())
-                            .unwrap_or(serde_json::Value::Null);
+                            .unwrap_or_default();
                     for annotated in rdsh_config::RdshSettings::keys() {
                         let key = annotated.split('(').next().unwrap_or(annotated);
-                        let value = cfg.get_dotted(key).unwrap_or(serde_json::Value::Null);
+                        let value = cfg.get_dotted(key).unwrap_or_default();
                         let rendered = match &value {
                             serde_json::Value::String(s) => s.clone(),
                             _ => serde_json::to_string(&value).unwrap_or_else(|_| "-".to_string()),
