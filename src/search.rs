@@ -72,7 +72,7 @@ enum EntryKind {
 fn entry_kind(e: &std::fs::DirEntry, p: &std::path::Path, name: &str) -> EntryKind {
     match e.file_type() {
         Ok(t) if t.is_dir() => {
-            if SKIP.contains(&name) || name.starts_with(".") {
+            if SKIP.contains(&name) || name.starts_with('.') {
                 EntryKind::Skip
             } else {
                 EntryKind::Dir
@@ -81,7 +81,7 @@ fn entry_kind(e: &std::fs::DirEntry, p: &std::path::Path, name: &str) -> EntryKi
         Ok(t) if t.is_file() => EntryKind::File,
         _ => {
             if p.is_dir() {
-                if SKIP.contains(&name) || name.starts_with(".") {
+                if SKIP.contains(&name) || name.starts_with('.') {
                     EntryKind::Skip
                 } else {
                     EntryKind::Dir
