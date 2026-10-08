@@ -11,6 +11,9 @@
 //! - verifier warnings (missing files surface explicitly)
 
 use std::io::Write;
+use std::path::Path;
+
+use crate::file_security::open_beneath;
 
 const SCHEMA: u32 = 2;
 const DEFAULT_BUDGET: usize = 4000;
@@ -136,18 +139,12 @@ fn read_bounded(path: &str, cap: usize) -> Option<String> {
     use std::io::Read;
     let root = std::fs::canonicalize(".").ok()?;
     let target = std::fs::canonicalize(path).ok()?;
-    if !target.starts_with(root) {
+    if !target.starts_with(&root) {
         return None;
     }
-    // Check before opening: opening a FIFO can block before handle metadata
-    // can reject it. Recheck the opened handle below as well.
-    if !std::fs::metadata(&target).ok()?.is_file() {
-        return None;
-    }
-    let file = std::fs::File::open(target).ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
+    // Open every path component relative to directory fds with O_NOFOLLOW.
+    // This closes the check/open race for both final files and parent dirs.
+    let file = open_beneath(&root, &target)?;
     let mut bytes = Vec::new();
     file.take(cap as u64).read_to_end(&mut bytes).ok()?;
     if bytes.contains(&0) {
@@ -167,15 +164,14 @@ fn read_bounded(path: &str, cap: usize) -> Option<String> {
     }
 }
 
-fn read_small_regular(path: &std::path::Path, cap: usize) -> Option<Vec<u8>> {
+fn read_small_regular(path: &std::path::Path, root: &Path, cap: usize) -> Option<Vec<u8>> {
     use std::io::Read;
-    if !std::fs::symlink_metadata(path).ok()?.is_file() {
+    let root = std::fs::canonicalize(root).ok()?;
+    let target = std::fs::canonicalize(path).ok()?;
+    if !target.starts_with(&root) {
         return None;
     }
-    let file = std::fs::File::open(path).ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
+    let file = open_beneath(&root, &target)?;
     let mut bytes = Vec::new();
     file.take(cap as u64 + 1).read_to_end(&mut bytes).ok()?;
     (bytes.len() <= cap).then_some(bytes)
@@ -302,7 +298,12 @@ fn recent_sessions(query: &str, limit: usize) -> Vec<String> {
     }
     let mut scored: Vec<(usize, u64, String)> = vec![];
     for p in session_files_sorted(4).into_iter().take(120) {
-        let bytes = read_small_regular(&p, 256 * 1024).unwrap_or_default();
+        let bytes = read_small_regular(
+            &p,
+            &std::path::PathBuf::from(format!("{}/sessions", crate::inspect::dsh_home())),
+            256 * 1024,
+        )
+        .unwrap_or_default();
         if bytes.is_empty() || bytes.len() > 256 * 1024 || bytes.contains(&0) {
             continue;
         }
@@ -372,7 +373,11 @@ fn code_hits(query: &str, max: usize) -> Vec<String> {
         return vec![];
     }
     let mut scored: Vec<(usize, String)> = vec![];
-    let mut stack = vec![std::path::PathBuf::from(".")];
+    let root = std::fs::canonicalize(".").ok();
+    let Some(root) = root else {
+        return vec![];
+    };
+    let mut stack = vec![root.clone()];
     let mut files_seen = 0usize;
     while let Some(dir) = stack.pop() {
         let entries = std::fs::read_dir(&dir)
@@ -410,7 +415,7 @@ fn code_hits(query: &str, max: usize) -> Vec<String> {
             if files_seen > 4000 {
                 break;
             }
-            let bytes = match read_small_regular(&p, 256 * 1024) {
+            let bytes = match read_small_regular(&p, &root, 256 * 1024) {
                 Some(b) => b,
                 None => continue,
             };

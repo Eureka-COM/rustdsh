@@ -10,12 +10,15 @@ fn private_directory() -> anyhow::Result<PathBuf> {
     getrandom::fill(&mut nonce).map_err(|e| anyhow::anyhow!("security runtime randomness: {e}"))?;
     let name: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
     let directory = std::env::temp_dir().join(format!("rdsh-tool-security-{name}"));
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
         builder.mode(0o700);
-    }
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     builder.create(&directory)?;
     Ok(directory)
 }
@@ -44,8 +47,8 @@ pub fn command(orig: &str, node: &str) -> anyhow::Result<std::process::Command> 
         "RDSH_SECURITY: audited tool runtime is missing"
     );
     anyhow::ensure!(
-        Path::new("/usr/bin/bwrap").is_file(),
-        "RDSH_SECURITY: bubblewrap is required; refusing unprotected delegation"
+        Path::new("/usr/bin/bwrap").is_file() && Path::new("/usr/bin/prlimit").is_file(),
+        "RDSH_SECURITY: bubblewrap and prlimit are required; refusing unprotected delegation"
     );
     let directory = private_directory()?;
     // Files are embedded in rdsh: no working-tree plugin can replace the gate.

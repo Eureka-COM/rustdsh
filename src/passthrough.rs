@@ -274,14 +274,13 @@ pub fn exec_boot(
     dry: bool,
     slim: bool,
 ) -> anyhow::Result<()> {
-    if !dry {
-        // One credential scan drives both the mirror import and the
-        // first-boot banner decision.
-        crate::auth::pre_boot(true);
-    }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig, dry, false)?;
+    if !dry {
+        // Status is read-only and runs only after enforcement validation.
+        crate::auth::pre_boot(true);
+    }
     cmd.arg("--profile").arg(profile);
     if let Some(f) = from_default {
         cmd.arg("--from-default-profile").arg(f);
@@ -306,12 +305,12 @@ pub fn exec_dump_config(
     dry: bool,
     slim: bool,
 ) -> anyhow::Result<()> {
-    if !dry {
-        crate::auth::pre_boot(false);
-    }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig, dry, false)?;
+    if !dry {
+        crate::auth::pre_boot(false);
+    }
     cmd.arg("--profile").arg(profile);
     for p in patches {
         cmd.arg("--patch").arg(p);
@@ -325,15 +324,16 @@ pub fn exec_dump_config(
 pub fn exec_raw(args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
     // Same first-boot guidance as exec_boot: `dsh` (shadowed) is the usual
     // first thing a newcomer runs.
-    if !dry {
-        crate::auth::pre_boot(true);
-    }
+
     let orig = find_original_dsh().ok_or_else(|| {
         anyhow::anyhow!("original dsh not found (set DSH_ORIG_BIN or reinstall with install.sh)")
     })?;
     let metadata_only =
         args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V" | "--help" | "-h");
     let mut cmd = base_cmd(&orig, dry, metadata_only)?;
+    if !dry {
+        crate::auth::pre_boot(true);
+    }
     cmd.args(args);
     apply_slim(&mut cmd, slim);
     exec_or_spawn(cmd, dry)
@@ -345,12 +345,12 @@ pub fn exec_plugin(
     dry: bool,
     slim: bool,
 ) -> anyhow::Result<()> {
-    if !dry {
-        crate::auth::pre_boot(false);
-    }
     let orig = find_original_dsh()
         .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
     let mut cmd = base_cmd(&orig, dry, false)?;
+    if !dry {
+        crate::auth::pre_boot(false);
+    }
     cmd.arg("plugin").arg("--profile").arg(profile);
     cmd.args(pnpm_args);
     apply_slim(&mut cmd, slim);

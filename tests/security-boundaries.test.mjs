@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, linkSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -72,6 +72,44 @@ test('context working files cannot read credentials outside the current reposito
   assert.doesNotMatch(result.stdout, /DUMMY_PRIVATE_VALUE/);
 });
 
+test('native search does not read hard links or symlinks to outside files', t => {
+  const { dir, env } = isolated(t);
+  const repo = path.join(dir, 'repo');
+  mkdirSync(repo);
+  const secret = path.join(dir, 'outside-search-secret');
+  writeFileSync(secret, 'DUMMY_SEARCH_ESCAPE');
+  symlinkSync(secret, path.join(repo, 'symlink.txt'));
+  linkSync(secret, path.join(repo, 'hardlink.txt'));
+  writeFileSync(path.join(repo, 'ordinary.txt'), 'DUMMY_SEARCH_EXPECTED');
+  const result = spawnSync(bin, ['search', 'DUMMY_SEARCH', '--dir', repo], { env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /DUMMY_SEARCH_EXPECTED/);
+  assert.doesNotMatch(result.stdout, /DUMMY_SEARCH_ESCAPE/);
+  const relative = spawnSync(bin, ['search', 'DUMMY_SEARCH', '--dir', '.'], { env, cwd: repo, encoding: 'utf8' });
+  assert.equal(relative.status, 0, relative.stderr);
+  assert.match(relative.stdout, /^\.\/ordinary\.txt:1: DUMMY_SEARCH_EXPECTED/m);
+  assert.doesNotMatch(relative.stdout, /DUMMY_SEARCH_ESCAPE/);
+});
+
+test('context working files reject in-tree symlinks and hard links to outside files', t => {
+  const { dir, env } = isolated(t);
+  const repo = path.join(dir, 'repo');
+  mkdirSync(repo);
+  mkdirSync(env.DSH_HOME);
+  const secret = path.join(dir, 'outside-context-secret');
+  writeFileSync(secret, 'DUMMY_CONTEXT_ESCAPE');
+  for (const [name, install] of [
+    ['linked-file.txt', () => symlinkSync(secret, path.join(repo, 'linked-file.txt'))],
+    ['hardlinked-file.txt', () => linkSync(secret, path.join(repo, 'hardlinked-file.txt'))],
+  ]) {
+    install();
+    writeFileSync(path.join(env.DSH_HOME, 'rdsh.json'), JSON.stringify({ beta: { context_engine: true }, context: { working_files: [name], enable_retriever: false, include_git_diff: false } }));
+    const result = spawnSync(bin, ['context', 'build'], { cwd: repo, env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /DUMMY_CONTEXT_ESCAPE/);
+    unlinkSync(path.join(repo, name));
+  }
+});
 test('context rejects a FIFO without blocking while opening it', t => {
   const { dir, env } = isolated(t);
   const repo = path.join(dir, 'repo');

@@ -23,8 +23,12 @@ registerHooks({
     const source = typeof loaded.source === 'string' ? loaded.source : Buffer.from(loaded.source).toString('utf8');
     if (digest(source) !== expected) throw new Error('RDSH_SECURITY: tool runtime changed during loading');
     const marker = '\t\tthis.maxParallelSubCalls = resolveMaxParallelSubCalls(config.maxParallelSubCalls);';
+    const modeResolution = '\tmodeFor(scope) {\n';
+    if (source.split(modeResolution).length !== 2) throw new Error('RDSH_SECURITY: unsupported mode resolution');
+    const presentation = '\tpresentAs(mode) {\n\t\tconst ctx = this.ctx;';
+    if (source.split(presentation).length !== 2) throw new Error('RDSH_SECURITY: unsupported scoped presentation');
     if (source.split(marker).length !== 2) throw new Error('RDSH_SECURITY: unsupported runtime constructor');
-    return { ...loaded, source: source.replace(marker, marker + '\n\t\tthis.defaultMode = \"native\";\n\t\tglobalThis[Symbol.for("rdsh.tool-boundary.install")](this);') };
+    return { ...loaded, source: source.replace(marker, marker + '\n\t\tthis.defaultMode = \"native\";\n\t\tglobalThis[Symbol.for("rdsh.tool-boundary.install")](this);').replace(modeResolution, modeResolution + '\t\treturn \"native\";\n').replace(presentation, '\tpresentAs(mode) {\n\t\tmode = \"native\";\n\t\tconst ctx = this.ctx;') };
   },
 });
 

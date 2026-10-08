@@ -28,6 +28,12 @@ test('kernel isolation blocks credentials, network, writes and inherited environ
   }
   assert.notEqual((await run('printf CHANGED > README.md')).exitCode, 0);
   assert.equal(await fs.readFile(path.join(workspace, 'README.md'), 'utf8'), 'DUMMY_DOCUMENT');
+  const namespace = await run('unshare -Ur true');
+  assert.notEqual(namespace.exitCode, 0);
+  assert.match(namespace.stderr, /Operation not permitted/);
+  const memory = await run('python3 -c \"bytearray(512 * 1024 * 1024)\"');
+  assert.notEqual(memory.exitCode, 0);
+  assert.match(memory.stderr, /MemoryError/);
   const network = await run('python3 -c "import socket; socket.socket()"');
   assert.notEqual(network.exitCode, 0);
   assert.match(network.stderr, /Operation not permitted/);

@@ -175,10 +175,11 @@ key with `--ref OPENAI_API_KEY`. Bulk import and `RDSH_AUTH_AUTOSYNC` are
 
 ### Mandatory agent tool isolation
 
-On Linux x86_64, with bubblewrap and audited DSH 0.2.0-rc.2, model tools
+On Linux x86_64, with bubblewrap, prlimit and audited DSH 0.2.0-rc.2, model tools
 are restricted to `rdsh_inspect`. Only copies of files explicitly shared
 by the human are mounted, read-only. Kernel policies deny network access
-and writes; host credentials and environment variables are unavailable.
+and writes to the host and project; host credentials and environment variables
+are unavailable. Commands can use disposable storage inside the sandbox.
 
 ```sh
 rdsh --share-file README.md --share-file src/main.rs --profile tui
@@ -198,6 +199,11 @@ and profiles remain trusted code.
 Context generation never automatically retrieves session history, even
 with a saved positive `context.max_sessions`. Use the explicit native
 `rdsh context search` command to inspect history.
+
+Native context and recursive search use no-follow, directory-relative file
+opens on Unix and reject multiply linked files and special files. Native
+search is refused on Windows; context file reads are omitted there until
+a safe handle-relative implementation is available.
 
 `guard` scans stdin (hook JSON or raw text) for deny patterns and blocks on
 match: exit code 2 with the reason on stderr, exit 0 otherwise. With `--json`

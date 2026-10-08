@@ -3,6 +3,7 @@ mod auth;
 mod compact;
 mod context;
 mod dsh_args;
+mod file_security;
 mod guard;
 mod inspect;
 mod local_http;
