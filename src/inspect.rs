@@ -128,8 +128,7 @@ fn scan_sessions(root: &str, project: Option<&str>) -> Vec<Session> {
                 let mut handles = vec![];
                 for proj in batch {
                     let pdir = std::path::Path::new(&root).join(proj);
-                    let proj = proj.clone();
-                    handles.push(s.spawn(move || scan_project(&pdir, &proj)));
+                    handles.push(s.spawn(move || scan_project(&pdir, proj)));
                 }
                 for h in handles {
                     out.extend(h.join().unwrap_or_default());
