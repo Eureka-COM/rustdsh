@@ -108,8 +108,8 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 - Floating setup UI, dsh-default detection, SearXNG search.
 - Installers: install.sh (Linux/macOS/WSL), install.ps1 (Windows).
 
-[Unreleased]: https://github.com/sahenjp/rustdsh/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/sahenjp/rustdsh/compare/v0.1.5...v0.2.0
+[Unreleased]: #unreleased
+[0.2.0]: docs/releases/v0.2.0.md
 [0.1.5]: https://github.com/sahenjp/rustdsh/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/sahenjp/rustdsh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/sahenjp/rustdsh/compare/v0.1.2...v0.1.3
