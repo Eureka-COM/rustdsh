@@ -623,12 +623,7 @@ fn profile_or_default(opt: Option<String>) -> anyhow::Result<String> {
 
 fn resolve_default_profile() -> anyhow::Result<String> {
     let env = std::env::var("RDSH_DEFAULT_PROFILE").ok();
-    if env
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .is_none()
-    {
+    if !env.as_deref().is_some_and(|e| !e.trim().is_empty()) {
         let configured = rdsh_config::load().general.default_profile;
         if !configured.trim().is_empty() {
             return Ok(configured.trim().to_string());
