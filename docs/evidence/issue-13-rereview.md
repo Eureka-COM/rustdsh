@@ -53,3 +53,14 @@ The implementation is ready for review as an explicit-report inbox. Automatic
 Harness monitoring, external notification delivery, and physical phone/Tailscale
 testing are outside this evidence. The sorting proposal remains stated in the
 README for the maintainer's review.
+
+## Guarded-main integration
+
+Integrated main `57777a61f7b3043b890f52cd5fd400ed761290b1` at
+`5017a84a5bfbaf9e67487ec9d7a72ae4fa00feeb`. Dashboard sources are byte-for-byte
+unchanged from the 205-test Windows/Linux runs and browser capture source above.
+The merge adds the main launcher's restricted tool runtime and release checks.
+Its Rust, security implementation and CLI regression sources match the current
+#75 integration that passed Rust 74, Node security 29, CLI 53 and Python 6
+checks locally. The final head's own GitHub matrix is also required before
+approval. No real model or tool execution was performed for the inbox feature.
