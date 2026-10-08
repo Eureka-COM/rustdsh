@@ -1,9 +1,9 @@
-import { buildInbox } from "./attention.mjs";
+import { buildInbox, buildAttentionHistory } from "./attention.mjs";
 
 const byId = (id) => document.getElementById(id);
 const kinds = { question: "未回答の質問", failure: "失敗の報告", dependency: "依存待ちの報告", blocked: "停止中 · 種類未報告" };
 const impacts = { critical: "重大", high: "大", medium: "中", low: "小" };
-const actions = { reported: "報告", updated: "報告を更新", resolved: "解消を報告", replaced: "原因を変更", reopened: "再発を報告" };
+const actions = { reported: "報告", updated: "報告を更新", resolved: "解消を報告", replaced: "原因を変更", reopened: "再発を報告", answered: "回答済み", cancelled: "取消し", expired: "期限切れ" };
 let lastState;
 let installed = false;
 
@@ -40,6 +40,8 @@ function targetButton(item) {
     const rows = byId(item.source === "question" ? "questions" : "tasks");
     const target = [...rows.children].find((row) => row.id === `${item.source}-${item.id}`);
     if (!target) return;
+    for (let parent = target.parentElement; parent; parent = parent.parentElement)
+      if (parent.tagName === "DETAILS") parent.open = true;
     target.scrollIntoView({ block: "center" });
     const input = item.source === "question" ? target.querySelector("textarea") : null;
     if (input) input.focus();
@@ -128,15 +130,7 @@ export function renderAttention(state) {
     (target || byId("attention-sort")).focus();
   }
 
-  const history = (state.tasks || []).flatMap((task) =>
-    (task.attention_history || []).map((entry) => ({ ...entry, source: "task", id: task.id })),
-  );
-  for (const question of state.questions || []) {
-    if (question.answer !== null) history.push({
-      source: "question", id: question.id, action: "answered", title: question.question,
-      recorded_at: question.answered_at, attention: question.attention || {},
-    });
-  }
+  const history = buildAttentionHistory(state);
   history.sort((a, b) => (b.recorded_at || "").localeCompare(a.recorded_at || "") ||
     (b.sequence || 0) - (a.sequence || 0) || a.id.localeCompare(b.id));
   const expanded = new Set([...byId("attention-history-list").querySelectorAll("details[open]")]

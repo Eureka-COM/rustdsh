@@ -139,7 +139,39 @@ export function validateAttentionState(state) {
   }
 }
 
-export function buildInbox(state, sort = "priority") {
+export function questionAttentionStatus(state, question, now = Date.now()) {
+  if (question.answer !== null) return "answered";
+  const card = state.question_contracts?.cards[question.id];
+  if (!card) return "open";
+  if (card.status !== "open") return card.status;
+  const expires = card.snapshot?.decision?.expires_at;
+  return expires && Date.parse(expires) <= now ? "expired" : "open";
+}
+
+export function buildAttentionHistory(state, now = Date.now()) {
+  const history = (state.tasks || []).flatMap((task) =>
+    (task.attention_history || []).map((entry) => ({ ...entry, source: "task", id: task.id })),
+  );
+  const answered = new Set();
+  for (const reply of state.feedback || []) {
+    if (reply.type !== "question_answered") continue;
+    answered.add(reply.question_id);
+    history.push({ source: "question", id: reply.question_id, action: "answered",
+      title: reply.question, recorded_at: reply.created_at, attention: reply.attention || {} });
+  }
+  for (const question of state.questions || []) {
+    const status = questionAttentionStatus(state, question, now);
+    if (status === "open" || (status === "answered" && answered.has(question.id))) continue;
+    const card = state.question_contracts?.cards[question.id];
+    history.push({ source: "question", id: question.id, action: status,
+      title: question.question, attention: question.attention || {},
+      recorded_at: status === "answered" ? question.answered_at :
+        status === "expired" ? card.snapshot.decision.expires_at : card.updated_at });
+  }
+  return history;
+}
+
+export function buildInbox(state, sort = "priority", now = Date.now()) {
   if (!["priority", "deadline", "impact", "next_action"].includes(sort)) throw new Error("Invalid inbox sort");
   const items = [];
   for (const task of state.tasks) {
@@ -153,7 +185,7 @@ export function buildInbox(state, sort = "priority") {
       reported_at: task.attention_history?.[0]?.recorded_at ?? task.updated_at ?? null });
   }
   for (const question of state.questions) {
-    if (question.answer !== null) continue;
+    if (questionAttentionStatus(state, question, now) !== "open") continue;
     const attention = question.attention || {};
     items.push({ source: "question", id: question.id, kind: "question", title: question.question,
       cause_id: attention.cause_id ?? null, deadline: attention.deadline ?? null,

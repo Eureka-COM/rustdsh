@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { buildInbox, normalizeAttention, validateAttentionState } from "../attention.mjs";
+import { buildInbox, buildAttentionHistory, normalizeAttention, validateAttentionState } from "../attention.mjs";
 import { applyOperation, ProjectStore } from "../state.mjs";
 
 function initial() {
@@ -12,6 +12,51 @@ function initial() {
 }
 const issue = { cause_id: "build", kind: "failure", deadline: "2026-10-09T09:00:00+09:00", impact: "high", next_action: "Review build failure" };
 const task = (id, extra = {}) => ({ id, title: `Task ${id}`, status: "doing", ...extra });
+
+test("typed cancellation and expiry leave the inbox and retain the original report in history", () => {
+  const state = initial();
+  applyOperation(state, "question", { id: "cancelled", question: "Review the original target",
+    decision: { kind: "consultation" }, attention: { next_action: "Review original conditions", impact: "high" } });
+  applyOperation(state, "question", { id: "expired", question: "Time-limited consultation",
+    decision: { kind: "consultation", expires_at: "2030-01-01T00:00:00Z" }, attention: { impact: "critical" } });
+  applyOperation(state, "question", { id: "legacy", question: "Legacy remains available" });
+  assert.equal(buildInbox(state, "priority", Date.UTC(2029, 0, 1)).itemCount, 3);
+  applyOperation(state, "question", { id: "cancelled", action: "cancel", expected_revision: 1, cancel_reason: "Target retired" });
+  const now = Date.UTC(2031, 0, 1);
+  assert.deepEqual(buildInbox(state, "priority", now).groups.map((group) => group.items[0].id), ["legacy"]);
+  const history = buildAttentionHistory(state, now);
+  assert.equal(history.find((entry) => entry.id === "cancelled").action, "cancelled");
+  assert.equal(history.find((entry) => entry.id === "cancelled").attention.next_action, "Review original conditions");
+  assert.equal(history.find((entry) => entry.id === "expired").action, "expired");
+  assert.equal(history.find((entry) => entry.id === "expired").recorded_at, "2030-01-01T00:00:00.000Z");
+  assert.equal(state.feedback.length, 0);
+  validateAttentionState(state);
+});
+
+test("typed revisions preserve omitted metadata and keep answered report history after a new question revision", () => {
+  const state = initial();
+  const first = { id: "typed", question: "Original consultation", decision: { kind: "consultation" },
+    attention: { next_action: "Review original text", cause_id: "cause-v1" } };
+  applyOperation(state, "question", first);
+  applyOperation(state, "question", { id: "typed", action: "revise", expected_revision: 1,
+    question: "Revised consultation", decision: { kind: "consultation" } });
+  assert.deepEqual(state.questions[0].attention, first.attention);
+  const card = state.question_contracts.cards.typed;
+  applyOperation(state, "answer", { id: "typed", answer: "Original response", expected_revision: card.revision,
+    contract_fingerprint: card.fingerprint });
+  applyOperation(state, "question", { id: "typed", action: "revise", expected_revision: 2,
+    question: "A new decision", decision: { kind: "consultation" }, attention: { next_action: "Review new target" } });
+  assert.equal(buildInbox(state).itemCount, 1);
+  const history = buildAttentionHistory(state);
+  assert.equal(history.length, 1);
+  assert.equal(history[0].title, "Revised consultation");
+  assert.equal(history[0].attention.next_action, "Review original text");
+  assert.equal(state.feedback[0].answer, "Original response");
+  assert.equal(state.feedback[0].execution_authorized, false);
+  assert.equal(state.questions[0].attention.next_action, "Review new target");
+  assert.throws(() => applyOperation(state, "question", { ...first, id: "invalid", attention: { unexpected: "field" } }), /attention/);
+  assert.ok(!state.questions.some((question) => question.id === "invalid"));
+});
 
 test("reported attention preserves omission and records explicit resolution and recurrence", () => {
   const state = initial();
