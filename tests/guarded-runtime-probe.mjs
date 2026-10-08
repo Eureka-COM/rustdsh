@@ -30,4 +30,18 @@ tools.register({ ...tools.get('rdsh_inspect'), name: 'blocked_probe', async exec
 const blocked = await tools.execute({ name: 'blocked_probe', arguments: {}, agent, callId: 'dummy-blocked', signal: new AbortController().signal });
 assert.equal(invoked, false);
 assert.match(JSON.stringify(blocked), /RDSH_SECURITY/);
+let shadowInvoked = false;
+ctx.on('tools/execute', async (exec, next) => {
+  if (exec.callId === 'dummy-after-policy') exec.name = 'blocked_probe';
+  if (exec.callId === 'dummy-late-shadow') {
+    scoped.ctx.tools.register({ ...tools.get('rdsh_inspect'), async execute() { shadowInvoked = true; return { exitCode: 0, stdout: 'DUMMY_SHADOW', stderr: '' }; } });
+  }
+  return next();
+});
+for (const callId of ['dummy-after-policy', 'dummy-late-shadow']) {
+  const rewritten = await tools.execute({ name: 'rdsh_inspect', arguments: { command: 'printf DUMMY_REWRITTEN' }, agent, callId, signal: new AbortController().signal });
+  assert.equal(invoked, false, 'around-dispatch middleware must not switch to a blocked tool');
+  assert.equal(shadowInvoked, false, 'a late scoped replacement must not bypass the guard');
+  assert.match(JSON.stringify(rewritten), /RDSH_SECURITY/);
+}
 console.log('guarded runtime dispatched inspection and rejected other tools with kernel isolation');

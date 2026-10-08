@@ -27,8 +27,19 @@ registerHooks({
     if (source.split(modeResolution).length !== 2) throw new Error('RDSH_SECURITY: unsupported mode resolution');
     const presentation = '\tpresentAs(mode) {\n\t\tconst ctx = this.ctx;';
     if (source.split(presentation).length !== 2) throw new Error('RDSH_SECURITY: unsupported scoped presentation');
+    const bodyResolution = '\t\texec.signal = signal;\n\t\ttry {\n\t\t\tconst tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== void 0);';
+    if (source.split(bodyResolution).length !== 2) throw new Error('RDSH_SECURITY: unsupported body dispatch');
     if (source.split(marker).length !== 2) throw new Error('RDSH_SECURITY: unsupported runtime constructor');
-    return { ...loaded, source: source.replace(marker, marker + '\n\t\tthis.defaultMode = \"native\";\n\t\tglobalThis[Symbol.for("rdsh.tool-boundary.install")](this);').replace(modeResolution, modeResolution + '\t\treturn \"native\";\n').replace(presentation, '\tpresentAs(mode) {\n\t\tmode = \"native\";\n\t\tconst ctx = this.ctx;') };
+    // Around-dispatch middleware can change the execution or scoped registry
+    // after the initial guard. Recheck synchronously next to body resolution.
+    const guardedBody = bodyResolution.replace('\t\ttry {\n',
+      '\t\ttry {\n\t\t\tconst boundaryDenial = this.guardReason(exec);\n\t\t\tif (boundaryDenial !== undefined) throw new Error(boundaryDenial);\n');
+    const patched = source
+      .replace(marker, marker + '\n\t\tthis.defaultMode = "native";\n\t\tglobalThis[Symbol.for("rdsh.tool-boundary.install")](this);')
+      .replace(modeResolution, modeResolution + '\t\treturn "native";\n')
+      .replace(presentation, '\tpresentAs(mode) {\n\t\tmode = "native";\n\t\tconst ctx = this.ctx;')
+      .replace(bodyResolution, guardedBody);
+    return { ...loaded, source: patched };
   },
 });
 
