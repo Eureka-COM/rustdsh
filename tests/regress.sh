@@ -101,8 +101,14 @@ rm -rf $FR
 SW=/tmp/rdsh-setupweb-AA
 mkdir -p $SW/home $SW/dsh
 HOME="$SW/home" DSH_HOME="$SW/dsh" $BIN setup --web --port 38082 >/dev/null 2>"$SW/setup.log" & SRV=$!
-sleep 1
-SETUP_TOKEN=$(sed -n 's/.*#key=\([0-9a-f]*\).*/\1/p' "$SW/setup.log" | head -n 1)
+SETUP_TOKEN=""
+i=0
+while [ -z "$SETUP_TOKEN" ] && [ "$i" -lt 10 ]; do
+  sleep 1
+  SETUP_TOKEN=$(sed -n 's/.*#key=\([0-9a-f]*\).*/\1/p' "$SW/setup.log" | head -n 1)
+  kill -0 "$SRV" 2>/dev/null || break
+  i=$((i+1))
+done
 if [ -z "$SETUP_TOKEN" ]; then echo "FAIL(output): setup --web URL"; kill $SRV 2>/dev/null; exit 1; fi
 if [ "$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:38082/api/status)" = "401" ]; then ok "setup --web status requires key"; else echo "FAIL(output): setup --web unauthed status"; kill $SRV 2>/dev/null; exit 1; fi
 if curl -fsS --max-time 5 -H "X-RDSH-Token: $SETUP_TOKEN" http://127.0.0.1:38082/api/status 2>/dev/null | grep -q "\"needed\":true"; then ok "setup --web status"; else echo "FAIL(output): setup --web status"; kill $SRV 2>/dev/null; exit 1; fi
@@ -129,7 +135,12 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
 PYEOF
 HTTPSRV=$!
-sleep 1
+i=0
+until curl -fsS --max-time 1 http://127.0.0.1:38083/ >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -ge 10 ] && break
+  kill -0 "$HTTPSRV" 2>/dev/null || break
+  sleep 1
+done
 if $BIN search-web "hello world" 2>&1 | grep -q "disabled by default"; then ok "search-web refused while extra off"; else echo "FAIL(output): extras gate"; kill $HTTPSRV 2>/dev/null; exit 1; fi
 $BIN settings set extras.enable search-web >/dev/null 2>&1
 if SEARXNG_URL="http://127.0.0.1:38083" $BIN search-web "hello world" --limit 5 2>/dev/null | grep -q "Alpha result"; then ok "search-web via fixture"; else echo "FAIL(output): search-web via fixture"; kill $HTTPSRV 2>/dev/null; exit 1; fi
