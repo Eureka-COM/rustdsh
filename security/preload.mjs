@@ -29,15 +29,22 @@ registerHooks({
     if (source.split(presentation).length !== 2) throw new Error('RDSH_SECURITY: unsupported scoped presentation');
     const bodyResolution = '\t\texec.signal = signal;\n\t\ttry {\n\t\t\tconst tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== void 0);';
     if (source.split(bodyResolution).length !== 2) throw new Error('RDSH_SECURITY: unsupported body dispatch');
+    const prePolicy = '\t\ttry {\n\t\t\tconst carrier = scopeTarget(this, exec.agent);\n\t\t\tconst gate = await this.ctx.waterfall(carrier, "tools/pre-execute"';
+    if (source.split(prePolicy).length !== 2) throw new Error('RDSH_SECURITY: unsupported pre-policy dispatch');
     if (source.split(marker).length !== 2) throw new Error('RDSH_SECURITY: unsupported runtime constructor');
     // Around-dispatch middleware can change the execution or scoped registry
     // after the initial guard. Recheck synchronously next to body resolution.
     const guardedBody = bodyResolution.replace('\t\ttry {\n',
       '\t\ttry {\n\t\t\tconst boundaryDenial = this.guardReason(exec);\n\t\t\tif (boundaryDenial !== undefined) throw new Error(boundaryDenial);\n');
+    // Forbidden tools must also stop before extensible policy can ask for
+    // approval. Keep the original post-policy guard for policy rewrites.
+    const guardedPrePolicy = prePolicy.replace('\t\ttry {\n',
+      '\t\ttry {\n\t\t\tconst boundaryDenial = this.guardReason(exec);\n\t\t\tif (boundaryDenial !== undefined) throw new Error(boundaryDenial);\n');
     const patched = source
       .replace(marker, marker + '\n\t\tthis.defaultMode = "native";\n\t\tglobalThis[Symbol.for("rdsh.tool-boundary.install")](this);')
       .replace(modeResolution, modeResolution + '\t\treturn "native";\n')
       .replace(presentation, '\tpresentAs(mode) {\n\t\tmode = "native";\n\t\tconst ctx = this.ctx;')
+      .replace(prePolicy, guardedPrePolicy)
       .replace(bodyResolution, guardedBody);
     return { ...loaded, source: patched };
   },

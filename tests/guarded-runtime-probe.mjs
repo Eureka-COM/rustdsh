@@ -26,9 +26,15 @@ assert.equal(result.stdout, 'DUMMY_GUARDED_RUNTIME');
 const dispatched = await tools.execute({ name: 'rdsh_inspect', arguments: { command: 'printf DUMMY_MODEL_DISPATCH' }, agent, callId: 'dummy-dispatch', signal: new AbortController().signal });
 assert.match(JSON.stringify(dispatched), /DUMMY_MODEL_DISPATCH/);
 let invoked = false;
+let blockedPrePolicy = false;
+ctx.on('tools/pre-execute', async (exec, next) => {
+  if (exec.callId === 'dummy-blocked') blockedPrePolicy = true;
+  return next();
+});
 tools.register({ ...tools.get('rdsh_inspect'), name: 'blocked_probe', async execute() { invoked = true; return {}; } });
 const blocked = await tools.execute({ name: 'blocked_probe', arguments: {}, agent, callId: 'dummy-blocked', signal: new AbortController().signal });
 assert.equal(invoked, false);
+assert.equal(blockedPrePolicy, false, 'a forbidden tool must not reach approval middleware');
 assert.match(JSON.stringify(blocked), /RDSH_SECURITY/);
 let shadowInvoked = false;
 ctx.on('tools/execute', async (exec, next) => {
