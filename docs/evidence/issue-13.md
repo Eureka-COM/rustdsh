@@ -1,5 +1,9 @@
 # Decision inbox: scope and browser evidence
 
+The captures below describe the original `f2a7dc6` baseline. See the
+[current-main re-review](issue-13-rereview.md) for the subsequent integration,
+typed-question lifecycle fixes, and fresh tests/captures.
+
 Issue: [#13](https://github.com/sahenjp/rustdsh/issues/13).
 Baseline: `f2a7dc6b2850a6f0c0e1ea1b53494b12cd2e1221`.
 
