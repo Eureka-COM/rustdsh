@@ -661,7 +661,7 @@ fn dump_config_native(profile: &str, patches: &[String]) -> anyhow::Result<()> {
         Ok(entries) => {
             println!("# layers under {root}:");
             let mut names: Vec<String> = entries
-                .filter_map(|e| e.ok())
+                .filter_map(Result::ok)
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect();
             names.sort();
