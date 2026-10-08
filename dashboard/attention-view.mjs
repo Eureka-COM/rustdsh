@@ -58,13 +58,15 @@ function badges(items, questions) {
   const seen = new Set();
   for (const item of items) {
     const question = item.source === "question" ? questions.get(item.id) : null;
+    const approval = question?.decision_kind
+      ? question.decision_kind === "approval" : Boolean(question?.default_action);
     const label = question
-      ? `${question.default_action ? "承認依頼" : "相談"} · 緊急度 ${question.urgency}`
+      ? `${approval ? "承認依頼" : "相談"} · 緊急度 ${question.urgency}`
       : kinds[item.kind];
     if (seen.has(label)) continue;
     seen.add(label);
     result.append(element("span", label, question
-      ? "kind" + (question.default_action ? " kind-approval" : "") : "status"));
+      ? "kind" + (approval ? " kind-approval" : "") : "status"));
   }
   return result;
 }
@@ -86,7 +88,9 @@ export function renderAttention(state) {
     ? document.activeElement.dataset.attentionFocus : null;
   const openGroups = new Set([...list.querySelectorAll("details[open]")]
     .map((details) => details.dataset.groupId));
-  const questions = new Map(state.questions.map((question) => [question.id, question]));
+  const questions = new Map(state.questions.map((question) => [question.id, {
+    ...question, decision_kind: state.question_contracts?.cards[question.id]?.snapshot.decision.kind,
+  }]));
   const inbox = buildInbox(state, byId("attention-sort").value);
   byId("attention-count").textContent = `${inbox.groups.length} 組 / ${inbox.itemCount} 件`;
   list.replaceChildren(...inbox.groups.map((group) => {

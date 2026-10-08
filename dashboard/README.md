@@ -266,6 +266,14 @@ resolve anything. Resolving one member leaves other members of its cause group
 active; human answers remove only their question. These fields never grant
 permission or execute actions.
 
+Revisioned questions follow their existing question-contract lifecycle: cancelled
+or expired cards leave the actionable inbox and remain in its history. This is
+separate from the reported attention deadline, which does not expire a question.
+Typed approval/consultation labels use the current contract kind. Optional
+attention survives a question revision when omitted; answered history keeps the
+original report snapshot even if that question is later revised. Navigation to
+a task opens its folded section in the current overview layout.
+
 Task attention changes are stored in server-managed `attention_history`, separate
 from the bounded event log. The history includes report snapshots before changes,
 resolution, cause replacement, and recurrence; identical reports do not add
