@@ -1,3 +1,5 @@
+import { renderAttention } from "./attention-view.mjs";
+
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.startsWith("/_rdsh") ? "/_rdsh/" : "/";
 const browserToken = base === "/"
@@ -123,6 +125,8 @@ function render(state) {
   $("task-milestones").textContent = [
     ...new Set(state.tasks.map((task) => task.milestone).filter(Boolean)),
   ].join(" / ");
+  const focusedTask = document.activeElement?.parentElement === $("tasks")
+    ? document.activeElement.id : null;
   $("tasks").replaceChildren(
     ...state.tasks.map((task) => {
       // #57: 端末を替えても同じ行へ戻れる安定アンカー。
@@ -141,6 +145,13 @@ function render(state) {
   );
   if (!state.tasks.length)
     $("tasks").append(emptyRow("タスクはまだ登録されていません", 4));
+  if (focusedTask) {
+    const row = [...$("tasks").children].find((item) => item.id === focusedTask);
+    if (row) {
+      row.tabIndex = -1;
+      row.focus({ preventScroll: true });
+    }
+  }
   // #40: SSE 更新中も回答下書き・フォーカスを保持し、未回答・期限切れ・取消しを承認扱いにしない。
   // Preserve in-progress human drafts while incoming events refresh the dashboard.
   const drafts = new Map(
@@ -253,6 +264,7 @@ function render(state) {
         return element;
       }),
   );
+  renderAttention(state);
   $("connection").textContent = "接続済み · プロジェクト専用";
   $("updated").textContent =
     `最終更新: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 未取得の指標はMCPから報告されたときに表示されます。費用は報告元のAPI換算値です。`;

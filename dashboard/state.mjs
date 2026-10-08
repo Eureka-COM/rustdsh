@@ -2,10 +2,10 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { normalizeAttention, updateTaskAttention, validateAttentionState } from "./attention.mjs";
 
-// Bucket D display notes (no schema change; schema stays 1):
-// #12 task contract, #13 review inbox, #14 outcome cards, #15 dependencies.
-// Field shapes below are frozen; only comments and wording may change here.
+// Schema 1 retains legacy task/question inputs. Optional attention data reports
+// decision needs; it does not implement execution contracts or grant permission.
 
 export const metricNames = [
   "total_cost_usd",
@@ -82,6 +82,7 @@ export class ProjectStore {
       throw new Error(
         "Dashboard state belongs to a different project or version",
       );
+    validateAttentionState(value);
     return new ProjectStore(project, value);
   }
   async mutate(operation, input) {
@@ -181,7 +182,7 @@ export function applyOperation(state, operation, input) {
       // #12 task contract (display-only): title holds the purpose, the project
       // root/id holds the target repo, and status/milestone/blocker hold the
       // exit conditions. This store never grants action approval; callers
-      // must check the active revision before starting work. Schema frozen.
+      // must check the active revision before starting work.
       // #14 outcome card: keep title/status/milestone/blocker/updated_at on
       // one card; "done" is not "verified" until a check result is recorded.
       const task = {
@@ -199,14 +200,14 @@ export function applyOperation(state, operation, input) {
         updated_at: new Date().toISOString(),
       };
       const index = state.tasks.findIndex((item) => item.id === task.id);
+      updateTaskAttention(task, index < 0 ? null : state.tasks[index], input, task.updated_at);
       if (index < 0) state.tasks.push(task);
       else state.tasks[index] = task;
       break;
     }
     case "question": {
-      // #13 review inbox: the inbox shows only answer === null, ordered by
-      // urgency then created_at. Plain event/metrics appends must not raise
-      // warnings there; answering removes the item but keeps this history.
+      // Inbox attention is explicit display metadata. Ordinary event/metric
+      // reports never create alerts; answered questions retain their history.
       const question = {
         id: text(input.id, "id", 160),
         question: text(input.question, "question"),
@@ -221,6 +222,10 @@ export function applyOperation(state, operation, input) {
         created_at: new Date().toISOString(),
         answer: null,
       };
+      if (Object.hasOwn(input, "attention_history"))
+        throw new Error("attention_history is server-managed");
+      if (Object.hasOwn(input, "attention"))
+        question.attention = normalizeAttention(input.attention, "question");
       if (state.questions.some((item) => item.id === question.id))
         throw new Error(
           "Question id already exists; use a new id for a follow-up",

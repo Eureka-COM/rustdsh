@@ -14,6 +14,11 @@ import { EventsHub } from "./webhooks.mjs";
 import { modernMcpHandler } from "./mcp2.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const browserScripts = new Map([
+  ["/app.mjs", "app.mjs"],
+  ["/attention.mjs", "attention.mjs"],
+  ["/attention-view.mjs", "attention-view.mjs"],
+]);
 const equal = (a, b) =>
   typeof a === "string" &&
   typeof b === "string" &&
@@ -255,7 +260,7 @@ export async function startDashboard(options) {
         (req.method === "POST" && ["metrics", "task", "question", "event"].some((operation) => route === `/api/update/${operation}`));
       const mcpAuthorized = kind === "project" && agentRoute && equal(req.headers.authorization, `Bearer ${mcpToken}`);
       const humanAuthorized = browserAuthorized(req, url, route);
-      const publicAsset = kind === "project" && req.method === "GET" && (route === "/" || route === "/app.mjs");
+      const publicAsset = kind === "project" && req.method === "GET" && (route === "/" || browserScripts.has(route));
       if (!publicAsset && !adminAuthorized && !mcpAuthorized && !humanAuthorized)
         return json(res, 401, {
           error:
@@ -288,11 +293,11 @@ export async function startDashboard(options) {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         return res.end(await fs.readFile(path.join(here, "ui.html")));
       }
-      if (req.method === "GET" && route === "/app.mjs") {
+      if (req.method === "GET" && browserScripts.has(route)) {
         res.writeHead(200, {
           "content-type": "text/javascript; charset=utf-8",
         });
-        return res.end(await fs.readFile(path.join(here, "app.mjs")));
+        return res.end(await fs.readFile(path.join(here, browserScripts.get(route))));
       }
       if (req.method === "GET" && route === "/api/config")
         return json(res, 200, {
